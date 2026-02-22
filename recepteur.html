@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Récepteur Sonore</title>
+</head>
+<body>
+
+<h2>Récepteur de texte par son</h2>
+
+<button onclick="startListening()">Démarrer l'écoute</button>
+
+<h3>Texte reçu :</h3>
+<p id="texte"></p>
+
+<script>
+
+let bitsBuffer = "";
+let texteRecu = "";
+let lastDetectionTime = 0;
+
+function detectBit(freq){
+
+    if(freq > 1700) return "1";
+    if(freq > 800 && freq < 1300) return "0";
+    return "";
+}
+
+async function startListening(){
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    const source = audioCtx.createMediaStreamSource(stream);
+
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+
+    source.connect(analyser);
+
+    const buffer = new Uint8Array(analyser.frequencyBinCount);
+
+    function loop(){
+
+        analyser.getByteFrequencyData(buffer);
+
+        let maxIndex = 0;
+        let maxValue = 0;
+
+        for(let i=0;i<buffer.length;i++){
+            if(buffer[i] > maxValue){
+                maxValue = buffer[i];
+                maxIndex = i;
+            }
+        }
+
+        const freq = maxIndex * audioCtx.sampleRate / analyser.fftSize;
+
+        const now = Date.now();
+
+        if(now - lastDetectionTime > 150){
+
+            const bit = detectBit(freq);
+
+            if(bit !== ""){
+                bitsBuffer += bit;
+                lastDetectionTime = now;
+
+                if(bitsBuffer.length === 8){
+
+                    const charCode = parseInt(bitsBuffer, 2);
+                    const char = String.fromCharCode(charCode);
+
+                    texteRecu += char;
+
+                    document.getElementById("texte").innerText = texteRecu;
+
+                    bitsBuffer = "";
+                }
+            }
+        }
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+}
+
+</script>
+
+</body>
+</html>

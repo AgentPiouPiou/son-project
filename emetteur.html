@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Émetteur Sonore</title>
+</head>
+<body>
+
+<h2>Émetteur de texte par son</h2>
+
+<input id="texte" placeholder="Tape ton texte ici">
+<button onclick="envoyer()">Envoyer</button>
+
+<script>
+
+function textToBinary(text){
+    return text.split('')
+        .map(c => c.charCodeAt(0).toString(2).padStart(8,'0'))
+        .join('');
+}
+
+async function envoyer(){
+
+    const texte = document.getElementById("texte").value;
+    const binary = textToBinary(texte);
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    let time = audioCtx.currentTime;
+
+    for(let bit of binary){
+
+        const osc = audioCtx.createOscillator();
+
+        // 0 = 1000 Hz, 1 = 2000 Hz
+        osc.frequency.value = bit === '1' ? 2000 : 1000;
+
+        osc.connect(audioCtx.destination);
+
+        osc.start(time);
+        osc.stop(time + 0.15);
+
+        time += 0.18;
+    }
+}
+
+</script>
+
+</body>
+</html>
