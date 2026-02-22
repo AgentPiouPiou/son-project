@@ -2,24 +2,22 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Émetteur</title>
+<title>Émetteur Stable</title>
 </head>
 <body>
 
-<h2>Émetteur</h2>
+<h2>Émetteur Stable</h2>
 
 <input id="texte" placeholder="Tape ton texte">
 <button onclick="envoyer()">Envoyer</button>
 
-<h3>Lettre en cours :</h3>
-<p id="lettre" style="font-size:30px;"></p>
-
-<canvas id="spectre" width="500" height="150" style="border:1px solid black;"></canvas>
-
 <script>
 
-let audioCtx;
-let analyser;
+const BIT_DURATION = 0.2;
+const FREQ_0 = 1200;
+const FREQ_1 = 2200;
+const FREQ_START = 3000;
+const FREQ_END = 3500;
 
 function textToBinary(text){
     return text.split('')
@@ -27,59 +25,34 @@ function textToBinary(text){
         .join('');
 }
 
-function drawSpectre(){
-    const canvas = document.getElementById("spectre");
-    const ctx = canvas.getContext("2d");
-    const buffer = new Uint8Array(analyser.frequencyBinCount);
-
-    function draw(){
-        requestAnimationFrame(draw);
-        analyser.getByteFrequencyData(buffer);
-        ctx.clearRect(0,0,canvas.width,canvas.height);
-
-        for(let i=0;i<buffer.length;i++){
-            ctx.fillRect(i, canvas.height, 1, -buffer[i]/2);
-        }
-    }
-    draw();
-}
-
 async function envoyer(){
 
     const texte = document.getElementById("texte").value;
     const binary = textToBinary(texte);
 
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    analyser = audioCtx.createAnalyser();
-
-    analyser.fftSize = 2048;
-    drawSpectre();
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
     let time = audioCtx.currentTime;
 
-    let indexChar = 0;
-    let bitCount = 0;
-
-    for(let bit of binary){
-
-        if(bitCount % 8 === 0){
-            document.getElementById("lettre").innerHTML =
-                "<b>" + texte[indexChar] + "</b>";
-            indexChar++;
-        }
-
+    function playTone(freq, duration){
         const osc = audioCtx.createOscillator();
-        osc.frequency.value = bit === '1' ? 2000 : 1000;
-
-        osc.connect(analyser);
-        analyser.connect(audioCtx.destination);
-
+        osc.frequency.value = freq;
+        osc.connect(audioCtx.destination);
         osc.start(time);
-        osc.stop(time + 0.12);
-
-        time += 0.15;
-        bitCount++;
+        osc.stop(time + duration);
+        time += duration;
     }
+
+    // START SIGNAL
+    playTone(FREQ_START, 0.5);
+
+    // DATA
+    for(let bit of binary){
+        playTone(bit === "1" ? FREQ_1 : FREQ_0, BIT_DURATION);
+    }
+
+    // END SIGNAL
+    playTone(FREQ_END, 0.5);
 }
 
 </script>
