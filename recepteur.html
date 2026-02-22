@@ -8,8 +8,10 @@
 
 <h2>Récepteur Stable</h2>
 
-<button onclick="startListening()">Démarrer</button>
+<button onclick="demarrer()">Démarrer (calibration 3s)</button>
 <button onclick="stopListening()">Stop</button>
+
+<p id="status"></p>
 
 <h3>Texte reçu :</h3>
 <p id="texte"></p>
@@ -25,11 +27,15 @@ const BIT_DURATION = 200;
 let audioCtx;
 let analyser;
 let stream;
+let noiseLevel = 0;
 let listening = false;
 let receiving = false;
 let bits = "";
 
-async function startListening(){
+async function demarrer(){
+
+    document.getElementById("status").innerText =
+        "Calibration bruit pendant 3 secondes...";
 
     stream = await navigator.mediaDevices.getUserMedia({
         audio:{
@@ -44,8 +50,24 @@ async function startListening(){
 
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 2048;
-
     source.connect(analyser);
+
+    const buffer = new Uint8Array(analyser.frequencyBinCount);
+
+    let total = 0;
+    let count = 0;
+    const start = Date.now();
+
+    while(Date.now() - start < 3000){
+        analyser.getByteFrequencyData(buffer);
+        total += Math.max(...buffer);
+        count++;
+    }
+
+    noiseLevel = total / count + 15;
+
+    document.getElementById("status").innerText =
+        "Prêt. En attente du signal START...";
 
     listening = true;
     loop();
@@ -56,9 +78,10 @@ function stopListening(){
     if(stream){
         stream.getTracks().forEach(track => track.stop());
     }
+    document.getElementById("status").innerText = "Arrêté";
 }
 
-function getDominantFreq(){
+function getDominant(){
 
     const buffer = new Uint8Array(analyser.frequencyBinCount);
     analyser.getByteFrequencyData(buffer);
@@ -73,6 +96,8 @@ function getDominantFreq(){
         }
     }
 
+    if(maxValue < noiseLevel) return null;
+
     return maxIndex * audioCtx.sampleRate / analyser.fftSize;
 }
 
@@ -80,12 +105,12 @@ function loop(){
 
     if(!listening) return;
 
-    const freq = getDominantFreq();
+    const freq = getDominant();
 
-    if(!receiving && Math.abs(freq - FREQ_START) < 150){
+    if(freq && !receiving && Math.abs(freq - FREQ_START) < 150){
         receiving = true;
         bits = "";
-        setTimeout(readBits, 500);
+        setTimeout(readBits,500);
     }
 
     requestAnimationFrame(loop);
@@ -95,18 +120,20 @@ function readBits(){
 
     if(!receiving) return;
 
-    const freq = getDominantFreq();
+    const freq = getDominant();
 
-    if(Math.abs(freq - FREQ_END) < 150){
+    if(freq && Math.abs(freq - FREQ_END) < 150){
         receiving = false;
         decode();
         return;
     }
 
-    if(Math.abs(freq - FREQ_1) < 150){
-        bits += "1";
-    } else if(Math.abs(freq - FREQ_0) < 150){
-        bits += "0";
+    if(freq){
+        if(Math.abs(freq - FREQ_1) < 150){
+            bits += "1";
+        } else if(Math.abs(freq - FREQ_0) < 150){
+            bits += "0";
+        }
     }
 
     setTimeout(readBits, BIT_DURATION);

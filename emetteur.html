@@ -11,6 +11,8 @@
 <input id="texte" placeholder="Tape ton texte">
 <button onclick="envoyer()">Envoyer</button>
 
+<p id="status"></p>
+
 <script>
 
 const BIT_DURATION = 0.2;
@@ -27,11 +29,15 @@ function textToBinary(text){
 
 async function envoyer(){
 
+    document.getElementById("status").innerText =
+        "Envoi dans 3 secondes...";
+
+    await new Promise(r => setTimeout(r,3000));
+
     const texte = document.getElementById("texte").value;
     const binary = textToBinary(texte);
 
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
     let time = audioCtx.currentTime;
 
     function playTone(freq, duration){
@@ -43,16 +49,15 @@ async function envoyer(){
         time += duration;
     }
 
-    // START SIGNAL
     playTone(FREQ_START, 0.5);
 
-    // DATA
     for(let bit of binary){
         playTone(bit === "1" ? FREQ_1 : FREQ_0, BIT_DURATION);
     }
 
-    // END SIGNAL
     playTone(FREQ_END, 0.5);
+
+    document.getElementById("status").innerText = "Transmission terminée";
 }
 
 </script>
