@@ -2,46 +2,109 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Récepteur Sonore</title>
+<title>Récepteur</title>
 </head>
 <body>
 
-<h2>Récepteur de texte par son</h2>
+<h2>Récepteur</h2>
 
-<button onclick="startListening()">Démarrer l'écoute</button>
+<button onclick="calibrer()">Analyser le bruit (3s)</button>
+<button onclick="startListening()">Démarrer écoute</button>
+<button onclick="stopListening()">Arrêter</button>
 
 <h3>Texte reçu :</h3>
 <p id="texte"></p>
 
+<canvas id="spectre" width="500" height="150" style="border:1px solid black;"></canvas>
+
 <script>
 
+let audioCtx;
+let analyser;
+let source;
+let stream;
+let noiseLevel = 0;
+let listening = false;
 let bitsBuffer = "";
 let texteRecu = "";
-let lastDetectionTime = 0;
+let lastTime = 0;
+
+async function setupAudio(){
+
+    stream = await navigator.mediaDevices.getUserMedia({
+        audio:{
+            echoCancellation:false,
+            noiseSuppression:false,
+            autoGainControl:false
+        }
+    });
+
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    source = audioCtx.createMediaStreamSource(stream);
+
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+
+    source.connect(analyser);
+}
+
+function drawSpectre(){
+
+    const canvas = document.getElementById("spectre");
+    const ctx = canvas.getContext("2d");
+    const buffer = new Uint8Array(analyser.frequencyBinCount);
+
+    function draw(){
+        if(!listening) return;
+
+        requestAnimationFrame(draw);
+        analyser.getByteFrequencyData(buffer);
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+
+        for(let i=0;i<buffer.length;i++){
+            ctx.fillRect(i, canvas.height, 1, -buffer[i]/2);
+        }
+    }
+    draw();
+}
+
+async function calibrer(){
+    await setupAudio();
+
+    const buffer = new Uint8Array(analyser.frequencyBinCount);
+    let total = 0;
+    let count = 0;
+
+    const start = Date.now();
+
+    while(Date.now() - start < 3000){
+        analyser.getByteFrequencyData(buffer);
+        total += Math.max(...buffer);
+        count++;
+    }
+
+    noiseLevel = total / count + 10;
+    alert("Calibration terminée");
+}
 
 function detectBit(freq){
-
-    if(freq > 1700) return "1";
+    if(freq > 1700 && freq < 2300) return "1";
     if(freq > 800 && freq < 1300) return "0";
     return "";
 }
 
 async function startListening(){
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+    if(!audioCtx) await setupAudio();
 
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
-    const source = audioCtx.createMediaStreamSource(stream);
-
-    const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 2048;
-
-    source.connect(analyser);
+    listening = true;
+    drawSpectre();
 
     const buffer = new Uint8Array(analyser.frequencyBinCount);
 
     function loop(){
+
+        if(!listening) return;
 
         analyser.getByteFrequencyData(buffer);
 
@@ -55,27 +118,26 @@ async function startListening(){
             }
         }
 
-        const freq = maxIndex * audioCtx.sampleRate / analyser.fftSize;
+        if(maxValue < noiseLevel){
+            requestAnimationFrame(loop);
+            return;
+        }
 
+        const freq = maxIndex * audioCtx.sampleRate / analyser.fftSize;
         const now = Date.now();
 
-        if(now - lastDetectionTime > 150){
+        if(now - lastTime > 150){
 
             const bit = detectBit(freq);
 
             if(bit !== ""){
                 bitsBuffer += bit;
-                lastDetectionTime = now;
+                lastTime = now;
 
                 if(bitsBuffer.length === 8){
-
-                    const charCode = parseInt(bitsBuffer, 2);
-                    const char = String.fromCharCode(charCode);
-
+                    const char = String.fromCharCode(parseInt(bitsBuffer,2));
                     texteRecu += char;
-
                     document.getElementById("texte").innerText = texteRecu;
-
                     bitsBuffer = "";
                 }
             }
@@ -87,7 +149,13 @@ async function startListening(){
     loop();
 }
 
-</script>
+function stopListening(){
+    listening = false;
+    if(stream){
+        stream.getTracks().forEach(track => track.stop());
+    }
+}
 
+</script>
 </body>
 </html>

@@ -2,16 +2,24 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Émetteur Sonore</title>
+<title>Émetteur</title>
 </head>
 <body>
 
-<h2>Émetteur de texte par son</h2>
+<h2>Émetteur</h2>
 
-<input id="texte" placeholder="Tape ton texte ici">
+<input id="texte" placeholder="Tape ton texte">
 <button onclick="envoyer()">Envoyer</button>
 
+<h3>Lettre en cours :</h3>
+<p id="lettre" style="font-size:30px;"></p>
+
+<canvas id="spectre" width="500" height="150" style="border:1px solid black;"></canvas>
+
 <script>
+
+let audioCtx;
+let analyser;
 
 function textToBinary(text){
     return text.split('')
@@ -19,32 +27,61 @@ function textToBinary(text){
         .join('');
 }
 
+function drawSpectre(){
+    const canvas = document.getElementById("spectre");
+    const ctx = canvas.getContext("2d");
+    const buffer = new Uint8Array(analyser.frequencyBinCount);
+
+    function draw(){
+        requestAnimationFrame(draw);
+        analyser.getByteFrequencyData(buffer);
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+
+        for(let i=0;i<buffer.length;i++){
+            ctx.fillRect(i, canvas.height, 1, -buffer[i]/2);
+        }
+    }
+    draw();
+}
+
 async function envoyer(){
 
     const texte = document.getElementById("texte").value;
     const binary = textToBinary(texte);
 
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+
+    analyser.fftSize = 2048;
+    drawSpectre();
 
     let time = audioCtx.currentTime;
 
+    let indexChar = 0;
+    let bitCount = 0;
+
     for(let bit of binary){
 
-        const osc = audioCtx.createOscillator();
+        if(bitCount % 8 === 0){
+            document.getElementById("lettre").innerHTML =
+                "<b>" + texte[indexChar] + "</b>";
+            indexChar++;
+        }
 
-        // 0 = 1000 Hz, 1 = 2000 Hz
+        const osc = audioCtx.createOscillator();
         osc.frequency.value = bit === '1' ? 2000 : 1000;
 
-        osc.connect(audioCtx.destination);
+        osc.connect(analyser);
+        analyser.connect(audioCtx.destination);
 
         osc.start(time);
-        osc.stop(time + 0.15);
+        osc.stop(time + 0.12);
 
-        time += 0.18;
+        time += 0.15;
+        bitCount++;
     }
 }
 
 </script>
-
 </body>
 </html>
