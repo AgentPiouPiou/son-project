@@ -2,40 +2,40 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Récepteur Stable</title>
+<title>Récepteur Avancé</title>
 </head>
 <body>
 
-<h2>Récepteur Stable</h2>
+<h2>Récepteur Avancé</h2>
 
-<button onclick="demarrer()">Démarrer (calibration 3s)</button>
-<button onclick="stopListening()">Stop</button>
+<button onclick="demarrer()">Démarrer (3s calibration)</button>
 
 <p id="status"></p>
-
-<h3>Texte reçu :</h3>
 <p id="texte"></p>
 
 <script>
 
-const FREQ_0 = 1200;
-const FREQ_1 = 2200;
-const FREQ_START = 3000;
-const FREQ_END = 3500;
-const BIT_DURATION = 200;
+const BIT_DURATION = 110;
 
-let audioCtx;
-let analyser;
-let stream;
+const FREQ = {
+  3200: "00",
+  3600: "01",
+  4000: "10",
+  4400: "11"
+};
+
+const START = 5000;
+const END = 5500;
+
+let audioCtx, analyser, stream;
 let noiseLevel = 0;
-let listening = false;
 let receiving = false;
-let bits = "";
+let symbols = [];
 
 async function demarrer(){
 
     document.getElementById("status").innerText =
-        "Calibration bruit pendant 3 secondes...";
+        "Calibration...";
 
     stream = await navigator.mediaDevices.getUserMedia({
         audio:{
@@ -45,11 +45,10 @@ async function demarrer(){
         }
     });
 
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx = new AudioContext();
     const source = audioCtx.createMediaStreamSource(stream);
-
     analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 2048;
+    analyser.fftSize = 4096;
     source.connect(analyser);
 
     const buffer = new Uint8Array(analyser.frequencyBinCount);
@@ -64,93 +63,114 @@ async function demarrer(){
         count++;
     }
 
-    noiseLevel = total / count + 15;
+    noiseLevel = total / count + 10;
 
     document.getElementById("status").innerText =
-        "Prêt. En attente du signal START...";
+        "Prêt";
 
-    listening = true;
     loop();
 }
 
-function stopListening(){
-    listening = false;
-    if(stream){
-        stream.getTracks().forEach(track => track.stop());
-    }
-    document.getElementById("status").innerText = "Arrêté";
-}
-
-function getDominant(){
+function getPeak(){
 
     const buffer = new Uint8Array(analyser.frequencyBinCount);
     analyser.getByteFrequencyData(buffer);
 
-    let maxIndex = 0;
-    let maxValue = 0;
+    let max = 0;
+    let index = 0;
 
     for(let i=0;i<buffer.length;i++){
-        if(buffer[i] > maxValue){
-            maxValue = buffer[i];
-            maxIndex = i;
+        if(buffer[i] > max){
+            max = buffer[i];
+            index = i;
         }
     }
 
-    if(maxValue < noiseLevel) return null;
+    if(max < noiseLevel) return null;
 
-    return maxIndex * audioCtx.sampleRate / analyser.fftSize;
+    return index * audioCtx.sampleRate / analyser.fftSize;
+}
+
+function detectSymbol(freq){
+
+    if(!freq) return null;
+
+    for(let f in FREQ){
+        if(Math.abs(freq - f) < 120){
+            return FREQ[f];
+        }
+    }
+
+    return null;
 }
 
 function loop(){
 
-    if(!listening) return;
+    const freq = getPeak();
 
-    const freq = getDominant();
-
-    if(freq && !receiving && Math.abs(freq - FREQ_START) < 150){
+    if(freq && Math.abs(freq - START) < 150){
         receiving = true;
-        bits = "";
-        setTimeout(readBits,500);
+        symbols = [];
+        setTimeout(readSymbol, 1000);
     }
 
     requestAnimationFrame(loop);
 }
 
-function readBits(){
+function readSymbol(){
 
     if(!receiving) return;
 
-    const freq = getDominant();
+    const samples = [];
 
-    if(freq && Math.abs(freq - FREQ_END) < 150){
+    for(let i=0;i<3;i++){
+        samples.push(detectSymbol(getPeak()));
+    }
+
+    const valid = samples.filter(s => s !== null);
+
+    if(valid.length > 1){
+        symbols.push(valid[0]);
+    }
+
+    const freq = getPeak();
+
+    if(freq && Math.abs(freq - END) < 150){
         receiving = false;
         decode();
         return;
     }
 
-    if(freq){
-        if(Math.abs(freq - FREQ_1) < 150){
-            bits += "1";
-        } else if(Math.abs(freq - FREQ_0) < 150){
-            bits += "0";
-        }
-    }
-
-    setTimeout(readBits, BIT_DURATION);
+    setTimeout(readSymbol, BIT_DURATION*2);
 }
 
 function decode(){
 
-    let texte = "";
+    let binary = symbols.join("");
 
-    for(let i=0;i<bits.length;i+=8){
-        const byte = bits.slice(i,i+8);
-        if(byte.length === 8){
-            texte += String.fromCharCode(parseInt(byte,2));
-        }
+    const data = binary.slice(0,-8);
+    const crc = binary.slice(-8);
+
+    let check = 0;
+    for(let i=0;i<data.length;i++){
+        check ^= parseInt(data[i]);
     }
 
-    document.getElementById("texte").innerText = texte;
+    if(check.toString(2).padStart(8,"0") !== crc){
+        document.getElementById("texte").innerText =
+            "Erreur CRC (bruit détecté)";
+        return;
+    }
+
+    let texte = "";
+
+    for(let i=0;i<data.length;i+=8){
+        const byte = data.slice(i,i+8);
+        texte += String.fromCharCode(parseInt(byte,2));
+    }
+
+    document.getElementById("texte").innerText =
+        "Reçu : " + texte;
 }
 
 </script>

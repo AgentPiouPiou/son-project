@@ -2,24 +2,30 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Émetteur Stable</title>
+<title>Émetteur Avancé</title>
 </head>
 <body>
 
-<h2>Émetteur Stable</h2>
+<h2>Émetteur Avancé</h2>
 
 <input id="texte" placeholder="Tape ton texte">
 <button onclick="envoyer()">Envoyer</button>
 
-<p id="status"></p>
+<p id="info"></p>
 
 <script>
 
-const BIT_DURATION = 0.2;
-const FREQ_0 = 1200;
-const FREQ_1 = 2200;
-const FREQ_START = 3000;
-const FREQ_END = 3500;
+const BIT_DURATION = 0.11;
+
+const FREQ = {
+  "00": 3200,
+  "01": 3600,
+  "10": 4000,
+  "11": 4400
+};
+
+const START = 5000;
+const END = 5500;
 
 function textToBinary(text){
     return text.split('')
@@ -27,37 +33,52 @@ function textToBinary(text){
         .join('');
 }
 
+function crc8(binary){
+    let crc = 0;
+    for(let i=0;i<binary.length;i++){
+        crc ^= parseInt(binary[i]);
+    }
+    return crc.toString(2).padStart(8,"0");
+}
+
 async function envoyer(){
 
-    document.getElementById("status").innerText =
-        "Envoi dans 3 secondes...";
-
-    await new Promise(r => setTimeout(r,3000));
-
     const texte = document.getElementById("texte").value;
-    const binary = textToBinary(texte);
+    let binary = textToBinary(texte);
+
+    const crc = crc8(binary);
+    binary += crc;
 
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     let time = audioCtx.currentTime;
 
-    function playTone(freq, duration){
+    function tone(freq, dur){
         const osc = audioCtx.createOscillator();
         osc.frequency.value = freq;
         osc.connect(audioCtx.destination);
         osc.start(time);
-        osc.stop(time + duration);
-        time += duration;
+        osc.stop(time + dur);
+        time += dur;
     }
 
-    playTone(FREQ_START, 0.5);
+    document.getElementById("info").innerText =
+        "Transmission...";
 
-    for(let bit of binary){
-        playTone(bit === "1" ? FREQ_1 : FREQ_0, BIT_DURATION);
+    tone(START, 1);
+
+    for(let i=0;i<binary.length;i+=2){
+
+        const bits = binary.slice(i,i+2);
+        const freq = FREQ[bits];
+
+        tone(freq, BIT_DURATION);
+        tone(freq, BIT_DURATION); // répétition
     }
 
-    playTone(FREQ_END, 0.5);
+    tone(END, 1);
 
-    document.getElementById("status").innerText = "Transmission terminée";
+    document.getElementById("info").innerText =
+        "Terminé";
 }
 
 </script>
