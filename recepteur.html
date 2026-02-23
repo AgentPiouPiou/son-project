@@ -2,23 +2,24 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8"/>
-<title>Récepteur décimal temps réel</title>
+<title>Récepteur Ultrasonique Stable</title>
 
 <style>
 body{
-  font-family:Arial;
-  max-width:900px;
-  margin:auto;
+    font-family:Arial;
+    max-width:900px;
+    margin:auto;
 }
 
 canvas{
-  width:100%;
-  height:240px;
-  border:1px solid #ccc;
+    width:100%;
+    height:220px;
+    border:1px solid #ccc;
 }
 
 .mono{
-  font-family:monospace;
+    font-family:monospace;
+    white-space:pre-wrap;
 }
 </style>
 </head>
@@ -29,134 +30,149 @@ canvas{
 
 <button onclick="start()">Démarrer réception</button>
 
-<h3>Spectre temps réel</h3>
-<canvas id="vizRx"></canvas>
+<h3>Texte reçu en temps réel</h3>
+<p id="liveText" class="mono"></p>
 
-<h3>Message</h3>
-<p id="msg" class="mono"></p>
+<h3>Spectre</h3>
+<canvas id="viz"></canvas>
 
 <script>
 
 const audioCtx=new AudioContext();
 
-const SYMBOL_FREQS=[
-15000,16000,17000,18000,19000,
-20000,21000,22000,23000,24000
-];
-
 const INIT_FREQ=14000;
+
+const SYMBOL_FREQS=[
+15000,
+16000,
+17000,
+18000,
+19000
+];
 
 let analyser;
 
-async function start(){
+/* -------- ENERGY DETECTOR -------- */
 
-  const stream=await navigator.mediaDevices.getUserMedia({
-    audio:{
-      echoCancellation:false,
-      noiseSuppression:false,
-      autoGainControl:false
+function energyAround(freq){
+
+    const buffer=new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(buffer);
+
+    const nyquist=audioCtx.sampleRate/2;
+
+    const idx=Math.round((freq/nyquist)*buffer.length);
+
+    let sum=0;
+    let count=0;
+
+    for(let i=idx-3;i<=idx+3;i++){
+        if(buffer[i]){
+            sum+=buffer[i];
+            count++;
+        }
     }
-  });
 
-  const source=audioCtx.createMediaStreamSource(stream);
-
-  analyser=audioCtx.createAnalyser();
-  analyser.fftSize=4096;
-
-  source.connect(analyser);
-
-  detectLoop();
-  visualize();
+    return count?sum/count:0;
 }
 
-/* ---------------- DETECTION ---------------- */
+/* -------- DETECTION -------- */
 
-function energyAt(freq){
-
-  const buffer=new Uint8Array(analyser.frequencyBinCount);
-  analyser.getByteFrequencyData(buffer);
-
-  const nyquist=audioCtx.sampleRate/2;
-
-  const idx=Math.round((freq/nyquist)*buffer.length);
-
-  let sum=0,n=0;
-
-  for(let i=idx-2;i<=idx+2;i++){
-
-    if(buffer[i]){
-      sum+=buffer[i];
-      n++;
-    }
-  }
-
-  return n?sum/n:0;
-}
-
-let bufferMsg="";
+let messageBuffer="";
+let lastSymbolTime=0;
 
 function detectLoop(){
 
-  const initEnergy=energyAt(INIT_FREQ);
+    const now=performance.now();
 
-  if(initEnergy>120){
-    bufferMsg="";
-  }
+    if(now-lastSymbolTime>60){
 
-  let best=-1;
-  let bestIdx=-1;
+        const initEnergy=energyAround(INIT_FREQ);
 
-  SYMBOL_FREQS.forEach((f,i)=>{
+        if(initEnergy>110){
+            messageBuffer="";
+        }
 
-    const e=energyAt(f);
+        let best=-1;
+        let bestIdx=-1;
 
-    if(e>best){
-      best=e;
-      bestIdx=i;
+        SYMBOL_FREQS.forEach((f,i)=>{
+
+            const e=energyAround(f);
+
+            if(e>best){
+                best=e;
+                bestIdx=i;
+            }
+        });
+
+        if(best>120 && bestIdx>=0){
+            messageBuffer+=bestIdx.toString();
+            document.getElementById("liveText").textContent=messageBuffer;
+            lastSymbolTime=now;
+        }
     }
-  });
 
-  if(best>120 && bestIdx>=0){
-    bufferMsg+=bestIdx.toString();
-    document.getElementById("msg").textContent=bufferMsg;
-  }
-
-  requestAnimationFrame(detectLoop);
+    requestAnimationFrame(detectLoop);
 }
 
-/* ---------------- VISUALISATION ---------------- */
+/* -------- VISUAL -------- */
 
 function visualize(){
 
-  const canvas=document.getElementById("vizRx");
-  const ctx=canvas.getContext("2d");
+    const canvas=document.getElementById("viz");
+    const ctx=canvas.getContext("2d");
 
-  const buffer=new Uint8Array(analyser.frequencyBinCount);
+    const buffer=new Uint8Array(analyser.frequencyBinCount);
 
-  function draw(){
+    function draw(){
 
-    analyser.getByteFrequencyData(buffer);
+        analyser.getByteFrequencyData(buffer);
 
-    ctx.fillStyle="white";
-    ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle="white";
+        ctx.fillRect(0,0,canvas.width,canvas.height);
 
-    ctx.beginPath();
+        ctx.beginPath();
 
-    for(let i=0;i<buffer.length;i++){
+        for(let i=0;i<buffer.length;i++){
 
-      const x=i/buffer.length*canvas.width;
-      const y=canvas.height-buffer[i];
+            const x=i/buffer.length*canvas.width;
+            const y=canvas.height-buffer[i];
 
-      if(i===0) ctx.moveTo(x,y);
-      else ctx.lineTo(x,y);
+            if(i===0) ctx.moveTo(x,y);
+            else ctx.lineTo(x,y);
+        }
+
+        ctx.stroke();
+
+        requestAnimationFrame(draw);
     }
 
-    ctx.stroke();
+    draw();
+}
 
-    requestAnimationFrame(draw);
-  }
+/* -------- START -------- */
 
-  draw();
+async function start(){
+
+    const stream=await navigator.mediaDevices.getUserMedia({
+        audio:{
+            echoCancellation:false,
+            noiseSuppression:false,
+            autoGainControl:false
+        }
+    });
+
+    const source=audioCtx.createMediaStreamSource(stream);
+
+    analyser=audioCtx.createAnalyser();
+    analyser.fftSize=4096;
+    analyser.smoothingTimeConstant=0.25;
+
+    source.connect(analyser);
+
+    detectLoop();
+    visualize();
 }
 
 </script>

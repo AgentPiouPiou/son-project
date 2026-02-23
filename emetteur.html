@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8"/>
-<title>Émetteur Temps Réel Décimal</title>
+<title>Émetteur Ultrasonique Stable</title>
 
 <style>
 body{
@@ -11,27 +11,26 @@ body{
   margin:auto;
 }
 
-canvas{
-  width:100%;
-  height:220px;
-  border:1px solid #ccc;
-}
-
 textarea{
   width:100%;
-  min-height:90px;
+  min-height:100px;
+}
+
+canvas{
+  width:100%;
+  height:200px;
+  border:1px solid #ccc;
 }
 
 .mono{
   font-family:monospace;
-  white-space:pre-wrap;
 }
 </style>
 </head>
 
 <body>
 
-<h1>🔊 Émetteur décimal ultrasonique</h1>
+<h1>🔊 Émetteur Ultrasonique</h1>
 
 <textarea id="texte"></textarea>
 
@@ -46,11 +45,12 @@ textarea{
 
 <script>
 
+/* -------- CONFIG -------- */
+
 const audioCtx=new AudioContext();
 
 const SYMBOL_FREQS=[
-15000,16000,17000,18000,19000,
-20000,21000,22000,23000,24000
+15000,16000,17000,18000,19000
 ];
 
 const INIT_FREQ=14000;
@@ -58,84 +58,83 @@ const INIT_FREQ=14000;
 const SYMBOL_DURATION=0.04;
 const GAP=0.01;
 
-/* ---------------- VISUALISATION ---------------- */
-
-const canvas=document.getElementById("vizTx");
-const ctx=canvas.getContext("2d");
-
-function drawEmitter(freq,time){
-
-  const w=canvas.width;
-  const h=canvas.height;
-
-  ctx.fillStyle="white";
-  ctx.fillRect(0,0,w,h);
-
-  ctx.fillStyle="black";
-
-  ctx.fillText("Emission planifiée",10,20);
-
-}
-
-/* ---------------- AUDIO ---------------- */
+/* -------- AUDIO -------- */
 
 function tone(freq,start,dur,gain=0.2){
 
-  const osc=audioCtx.createOscillator();
-  const g=audioCtx.createGain();
+    const osc=audioCtx.createOscillator();
+    const g=audioCtx.createGain();
 
-  osc.frequency.value=freq;
-  osc.type="sine";
+    osc.frequency.value=freq;
+    osc.type="sine";
 
-  g.gain.setValueAtTime(0.00001,start);
-  g.gain.linearRampToValueAtTime(gain,start+0.005);
-  g.gain.linearRampToValueAtTime(0.00001,start+dur);
+    g.gain.setValueAtTime(0.00001,start);
+    g.gain.linearRampToValueAtTime(gain,start+0.005);
+    g.gain.linearRampToValueAtTime(0.00001,start+dur);
 
-  osc.connect(g);
-  g.connect(audioCtx.destination);
+    osc.connect(g);
+    g.connect(audioCtx.destination);
 
-  osc.start(start);
-  osc.stop(start+dur);
+    osc.start(start);
+    osc.stop(start+dur);
 }
 
-/* ---------------- ENCODING ---------------- */
+/* -------- ENCODING -------- */
 
 function encodeDecimal(text){
 
-  return text
-    .split("")
-    .map(c=>parseInt(c))
-    .filter(n=>!isNaN(n));
+    return text
+        .split("")
+        .map(c=>parseInt(c))
+        .filter(n=>!isNaN(n));
 }
+
+/* -------- VISUAL -------- */
+
+function drawEmitter(freq){
+
+    const canvas=document.getElementById("vizTx");
+    const ctx=canvas.getContext("2d");
+
+    ctx.fillStyle="white";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    ctx.fillStyle="black";
+    ctx.fillText("Emission: "+freq+" Hz",10,20);
+}
+
+/* -------- SEND -------- */
 
 async function send(){
 
-  await audioCtx.resume();
+    await audioCtx.resume();
 
-  const text=document.getElementById("texte").value;
+    const text=document.getElementById("texte").value;
 
-  const symbols=encodeDecimal(text);
+    const symbols=encodeDecimal(text);
 
-  let t=audioCtx.currentTime+0.1;
+    let t=audioCtx.currentTime+0.1;
 
-  /* INIT TONE */
-  tone(INIT_FREQ,t,0.8,0.25);
+    /* INIT */
+    tone(INIT_FREQ,t,0.8,0.25);
 
-  t+=1.0;
+    t+=1.0;
 
-  for(const s of symbols){
+    for(const s of symbols){
 
-    const freq=SYMBOL_FREQS[s];
+        const freq=SYMBOL_FREQS[s];
 
-    tone(freq,t,SYMBOL_DURATION,0.2);
+        if(!freq) continue;
 
-    drawEmitter(freq,t);
+        tone(freq,t,SYMBOL_DURATION,0.2);
 
-    t+=SYMBOL_DURATION+GAP;
-  }
+        drawEmitter(freq);
 
-  document.getElementById("etat").textContent=
-  "Transmission lancée";
+        t+=SYMBOL_DURATION+GAP;
+    }
+
+    document.getElementById("etat").textContent=
+    "Transmission lancée";
 }
 
 </script>
