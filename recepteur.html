@@ -1,152 +1,300 @@
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
-<meta charset="UTF-8">
-<title>Récepteur Stable</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Récepteur sonore fiable</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 900px; margin: 24px auto; line-height: 1.4; }
+  button { padding: 10px 14px; font-weight: 600; cursor: pointer; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+  .muted { color: #666; }
+</style>
 </head>
 <body>
+  <h1>🎧 Récepteur (calibration ambiante)</h1>
+  <p class="muted">Calibration 4 secondes du bruit de la pièce, puis détection START/END + décodage majoritaire ×3 + vérification CRC8.</p>
 
-<h2>Récepteur</h2>
+  <button id="startBtn">Démarrer</button>
 
-<button onclick="start()">Démarrer (Calibration 5s)</button>
+  <h3>Journal</h3>
+  <p id="log" class="mono">Prêt.</p>
 
-<p id="affichage"></p>
+  <h3>Données</h3>
+  <p><strong>Bits reçus (décodés):</strong></p>
+  <p id="bits" class="mono"></p>
+  <p><strong>Texte final:</strong></p>
+  <p id="text" class="mono"></p>
 
 <script>
+const CFG = {
+  BIT_DURATION: 0.09,
+  START_DURATION: 1.0,
+  GAP_DURATION: 0.2,
+  FREQ0: 1300,
+  FREQ1: 2600,
+  START_FREQ: 3400,
+  END_FREQ: 4200,
+  PREAMBLE: '10101010',
+  SYNC: '11110000'
+};
 
-const FREQ0 = 1200;
-const FREQ1 = 5000;
-const START = 7000;
-const END = 9000;
-const PREAMBLE = "11110000";
+let audioCtx;
+let analyser;
+let stream;
+let calibration = null;
+let listening = false;
+let receiveTimer = null;
+let startCandidateTime = null;
+let scanRAF = null;
 
-let audioCtx, analyser;
-let noiseFloor = 0;
+const logEl = document.getElementById('log');
+const bitsEl = document.getElementById('bits');
+const textEl = document.getElementById('text');
 
-let receiving = false;
-let bufferBits = "";
-let finalText = "";
-
-async function start(){
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-        audio:{
-            echoCancellation:false,
-            noiseSuppression:false,
-            autoGainControl:false
-        }
-    });
-
-    audioCtx = new AudioContext();
-    const source = audioCtx.createMediaStreamSource(stream);
-
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 4096;
-
-    source.connect(analyser);
-
-    calibrateNoise();
+function setLog(msg) {
+  logEl.textContent = msg;
 }
 
-function calibrateNoise(){
-
-    const buffer = new Uint8Array(analyser.frequencyBinCount);
-
-    let total=0;
-    let count=0;
-    const start = Date.now();
-
-    function measure(){
-
-        analyser.getByteFrequencyData(buffer);
-
-        total += Math.max(...buffer);
-        count++;
-
-        if(Date.now()-start < 5000){
-            requestAnimationFrame(measure);
-        }
-        else{
-            noiseFloor = total/count + 15;
-            listen();
-        }
+function crc8(bytes) {
+  let crc = 0x00;
+  for (const b of bytes) {
+    crc ^= b;
+    for (let i = 0; i < 8; i++) {
+      crc = (crc & 0x80) ? ((crc << 1) ^ 0x07) : (crc << 1);
+      crc &= 0xff;
     }
-
-    measure();
+  }
+  return crc;
 }
 
-function bandEnergy(freq){
+function energyAt(freq, width = 3) {
+  const buffer = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteFrequencyData(buffer);
 
-    const buffer = new Uint8Array(analyser.frequencyBinCount);
-    analyser.getByteFrequencyData(buffer);
+  const nyquist = audioCtx.sampleRate / 2;
+  const idx = Math.round((freq / nyquist) * buffer.length);
 
-    const nyquist = audioCtx.sampleRate/2;
-    const index = Math.round(freq/nyquist * buffer.length);
-
-    let energy = 0;
-
-    for(let i=index-4;i<=index+4;i++){
-        if(buffer[i]) energy+=buffer[i];
+  let sum = 0;
+  let n = 0;
+  for (let i = idx - width; i <= idx + width; i++) {
+    if (i >= 0 && i < buffer.length) {
+      sum += buffer[i];
+      n++;
     }
-
-    return energy;
+  }
+  return n ? (sum / n) : 0;
 }
 
-function listen(){
+async function calibrateAmbient(ms = 4000) {
+  setLog('Calibration ambiante en cours...');
 
-    if(!receiving){
+  const tracks = {
+    f0: [], f1: [], fs: [], fe: []
+  };
 
-        if(bandEnergy(START) > noiseFloor){
-            receiving=true;
-            finalText="";
-            bufferBits="";
-            setTimeout(readBit,250);
+  const endAt = performance.now() + ms;
+
+  return new Promise(resolve => {
+    function step() {
+      tracks.f0.push(energyAt(CFG.FREQ0));
+      tracks.f1.push(energyAt(CFG.FREQ1));
+      tracks.fs.push(energyAt(CFG.START_FREQ));
+      tracks.fe.push(energyAt(CFG.END_FREQ));
+
+      if (performance.now() < endAt) {
+        requestAnimationFrame(step);
+      } else {
+        const stats = (arr) => {
+          const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+          const variance = arr.reduce((a, b) => a + (b - mean) ** 2, 0) / arr.length;
+          const std = Math.sqrt(variance);
+          return { mean, std, thr: mean + Math.max(10, std * 3.2) };
+        };
+
+        resolve({
+          f0: stats(tracks.f0),
+          f1: stats(tracks.f1),
+          fs: stats(tracks.fs),
+          fe: stats(tracks.fe)
+        });
+      }
+    }
+    step();
+  });
+}
+
+function majorityDecode(tripleBits) {
+  const out = [];
+  for (let i = 0; i + 2 < tripleBits.length; i += 3) {
+    const chunk = tripleBits.slice(i, i + 3);
+    const ones = (chunk[0] === '1') + (chunk[1] === '1') + (chunk[2] === '1');
+    out.push(ones >= 2 ? '1' : '0');
+  }
+  return out.join('');
+}
+
+function bitsToBytes(bits) {
+  const bytes = [];
+  for (let i = 0; i + 7 < bits.length; i += 8) {
+    bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  }
+  return bytes;
+}
+
+function parseFrame(decodedBits) {
+  const marker = CFG.PREAMBLE + CFG.SYNC;
+  const start = decodedBits.indexOf(marker);
+  if (start < 0) throw new Error('Préambule introuvable.');
+
+  const frame = decodedBits.slice(start + marker.length);
+  if (frame.length < 16) throw new Error('Trame incomplète (taille + CRC manquants).');
+
+  const len = parseInt(frame.slice(0, 8), 2);
+  const needed = 8 + (len * 8) + 8;
+
+  if (frame.length < needed) throw new Error('Trame incomplète (payload tronqué).');
+
+  const payloadBits = frame.slice(8, 8 + len * 8);
+  const crcBits = frame.slice(8 + len * 8, 8 + len * 8 + 8);
+
+  const payload = bitsToBytes(payloadBits);
+  const crcRx = parseInt(crcBits, 2);
+  const crcCalc = crc8(payload);
+
+  if (crcRx !== crcCalc) {
+    throw new Error(`CRC invalide: reçu 0x${crcRx.toString(16)}, attendu 0x${crcCalc.toString(16)}.`);
+  }
+
+  return new TextDecoder().decode(new Uint8Array(payload));
+}
+
+function stopReceptionLoop() {
+  if (receiveTimer) {
+    clearTimeout(receiveTimer);
+    receiveTimer = null;
+  }
+}
+
+function launchBitReader(firstSampleTime) {
+  let sampleTime = firstSampleTime;
+  let rawBits = '';
+
+  setLog('Réception démarrée.');
+
+  function readAtSchedule() {
+    if (!listening) return;
+
+    const now = audioCtx.currentTime;
+    const delayMs = Math.max(0, (sampleTime - now) * 1000);
+
+    receiveTimer = setTimeout(() => {
+      if (!listening) return;
+
+      const e0 = energyAt(CFG.FREQ0);
+      const e1 = energyAt(CFG.FREQ1);
+      const ee = energyAt(CFG.END_FREQ);
+
+      if (ee > calibration.fe.thr && ee > (e0 + e1) / 2) {
+        listening = false;
+        stopReceptionLoop();
+
+        const decoded = majorityDecode(rawBits);
+        bitsEl.textContent = decoded;
+
+        try {
+          const text = parseFrame(decoded);
+          textEl.textContent = text;
+          setLog('Message reçu avec CRC valide ✅');
+        } catch (err) {
+          textEl.textContent = '';
+          setLog(`Erreur de décodage: ${err.message}`);
         }
 
-    }
-
-    requestAnimationFrame(listen);
-}
-
-function readBit(){
-
-    if(!receiving) return;
-
-    if(bandEnergy(END) > noiseFloor){
-        receiving=false;
         return;
-    }
+      }
 
-    let e0 = bandEnergy(FREQ0);
-    let e1 = bandEnergy(FREQ1);
+      if (e0 > calibration.f0.thr || e1 > calibration.f1.thr) {
+        rawBits += (e1 > e0 ? '1' : '0');
+      }
 
-    if(e0 < noiseFloor && e1 < noiseFloor){
-        setTimeout(readBit,250);
-        return;
-    }
+      sampleTime += CFG.BIT_DURATION;
+      readAtSchedule();
+    }, delayMs);
+  }
 
-    let bit = e0 > e1 ? "0" : "1";
-
-    bufferBits += bit;
-
-    document.getElementById("affichage").innerText =
-        finalText + " [" + bufferBits + "]";
-
-    if(bufferBits.length === 8){
-
-        if(bufferBits.startsWith(PREAMBLE)){
-            bufferBits = bufferBits.slice(8);
-        }
-        else{
-            finalText +=
-                String.fromCharCode(parseInt(bufferBits,2));
-            bufferBits="";
-        }
-    }
-
-    setTimeout(readBit,250);
+  readAtSchedule();
 }
 
+function scanForStart() {
+  if (!analyser || !calibration) return;
+
+  const eStart = energyAt(CFG.START_FREQ);
+  const now = audioCtx.currentTime;
+
+  if (eStart > calibration.fs.thr) {
+    if (startCandidateTime === null) startCandidateTime = now;
+
+    if ((now - startCandidateTime) >= 0.35 && !listening) {
+      listening = true;
+      bitsEl.textContent = '';
+      textEl.textContent = '';
+
+      const firstBit = startCandidateTime + CFG.START_DURATION + CFG.GAP_DURATION + (CFG.BIT_DURATION / 2);
+      launchBitReader(firstBit);
+      startCandidateTime = null;
+    }
+  } else {
+    startCandidateTime = null;
+  }
+
+  scanRAF = requestAnimationFrame(scanForStart);
+}
+
+async function start() {
+  if (audioCtx) {
+    setLog('Déjà démarré.');
+    return;
+  }
+
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false
+    }
+  });
+
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const source = audioCtx.createMediaStreamSource(stream);
+
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 8192;
+  analyser.smoothingTimeConstant = 0.15;
+
+  source.connect(analyser);
+
+  calibration = await calibrateAmbient(4000);
+
+  setLog(
+    'Calibration OK. Seuils: ' +
+    `f0=${calibration.f0.thr.toFixed(1)}, ` +
+    `f1=${calibration.f1.thr.toFixed(1)}, ` +
+    `start=${calibration.fs.thr.toFixed(1)}, ` +
+    `end=${calibration.fe.thr.toFixed(1)}.\nEn attente du START...`
+  );
+
+  scanForStart();
+}
+
+document.getElementById('startBtn').addEventListener('click', start);
+
+window.addEventListener('beforeunload', () => {
+  stopReceptionLoop();
+  if (scanRAF) cancelAnimationFrame(scanRAF);
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (audioCtx) audioCtx.close();
+});
 </script>
 </body>
 </html>

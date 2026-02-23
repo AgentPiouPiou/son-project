@@ -1,78 +1,153 @@
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
-<meta charset="UTF-8">
-<title>Émetteur Stable</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Émetteur sonore fiable</title>
 <style>
-.bold{font-weight:bold;color:red;}
+  body { font-family: Arial, sans-serif; max-width: 820px; margin: 24px auto; line-height: 1.4; }
+  textarea { width: 100%; min-height: 100px; }
+  button { padding: 10px 14px; font-weight: 600; cursor: pointer; }
+  .muted { color: #666; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+  .ok { color: #0b7a0b; font-weight: 700; }
 </style>
 </head>
 <body>
+  <h1>🔊 Émetteur (BFSK robuste)</h1>
+  <p class="muted">
+    Encodage: UTF-8 → trame (préambule + longueur + CRC8) → répétition ×3 pour corriger les erreurs ponctuelles.
+  </p>
 
-<h2>Émetteur</h2>
+  <label for="texteInput">Texte à transmettre</label>
+  <textarea id="texteInput" placeholder="Ex: Bonjour de l'émetteur"></textarea>
+  <br /><br />
+  <button id="sendBtn">Envoyer par son</button>
 
-<input id="texteInput" placeholder="Texte">
-<button onclick="send()">Envoyer</button>
-
-<p id="texteAffiche"></p>
-<p id="binaireAffiche"></p>
+  <h3>État</h3>
+  <p id="etat" class="mono">Prêt.</p>
+  <h3>Binaire (avant répétition ×3)</h3>
+  <p id="binaire" class="mono"></p>
 
 <script>
+const CFG = {
+  BIT_DURATION: 0.09,
+  START_DURATION: 1.0,
+  END_DURATION: 1.0,
+  GAP_DURATION: 0.2,
+  FREQ0: 1300,
+  FREQ1: 2600,
+  START_FREQ: 3400,
+  END_FREQ: 4200,
+  PREAMBLE: '10101010',
+  SYNC: '11110000'
+};
 
-const BIT_DURATION = 0.25;
-const FREQ0 = 1200;
-const FREQ1 = 5000;
-const START = 7000;
-const END = 9000;
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-const PREAMBLE = "11110000";
-
-let audioCtx = new (window.AudioContext||window.webkitAudioContext)();
-
-function textToBinary(t){
-    return t.split('').map(c =>
-        c.charCodeAt(0).toString(2).padStart(8,'0')
-    );
+function toBits(byteArray) {
+  return Array.from(byteArray).map(b => b.toString(2).padStart(8, '0')).join('');
 }
 
-function tone(freq,dur,time){
-    let osc = audioCtx.createOscillator();
-    osc.frequency.value = freq;
-    osc.connect(audioCtx.destination);
-    osc.start(time);
-    osc.stop(time+dur);
-}
-
-async function send(){
-
-    let text = document.getElementById("texteInput").value;
-    let binaries = textToBinary(text);
-
-    let time = audioCtx.currentTime;
-
-    tone(START,1.2,time);
-    time+=1.2;
-
-    for(let i=0;i<binaries.length;i++){
-
-        document.getElementById("texteAffiche").innerHTML =
-            text.split('').map((l,index)=>
-                index===i ? `<span class="bold">${l}</span>` : l
-            ).join('');
-
-        let full = PREAMBLE + binaries[i];
-
-        document.getElementById("binaireAffiche").innerText = full;
-
-        for(let bit of full){
-            tone(bit==="0"?FREQ0:FREQ1,BIT_DURATION,time);
-            time+=BIT_DURATION;
-        }
+function crc8(bytes) {
+  let crc = 0x00;
+  for (const b of bytes) {
+    crc ^= b;
+    for (let i = 0; i < 8; i++) {
+      crc = (crc & 0x80) ? ((crc << 1) ^ 0x07) : (crc << 1);
+      crc &= 0xff;
     }
-
-    tone(END,1.2,time);
+  }
+  return crc;
 }
 
+function repeatBits(bits, n = 3) {
+  return bits.split('').map(bit => bit.repeat(n)).join('');
+}
+
+function tone(freq, start, dur, gainValue = 0.18) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+
+  osc.frequency.value = freq;
+  osc.type = 'sine';
+
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.exponentialRampToValueAtTime(gainValue, start + 0.01);
+  gain.gain.setValueAtTime(gainValue, start + Math.max(0.01, dur - 0.015));
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  osc.start(start);
+  osc.stop(start + dur);
+}
+
+function buildFrameBits(text) {
+  const payload = new TextEncoder().encode(text);
+  if (payload.length > 255) {
+    throw new Error('Message trop long (max 255 octets UTF-8).');
+  }
+
+  const len = payload.length;
+  const crc = crc8(payload);
+
+  const headerBits = CFG.PREAMBLE + CFG.SYNC + len.toString(2).padStart(8, '0');
+  const payloadBits = toBits(payload);
+  const crcBits = crc.toString(2).padStart(8, '0');
+
+  return {
+    visibleBits: headerBits + payloadBits + crcBits,
+    encodedBits: repeatBits(headerBits + payloadBits + crcBits, 3),
+    len,
+    crc
+  };
+}
+
+async function send() {
+  const etat = document.getElementById('etat');
+  const binaire = document.getElementById('binaire');
+  const text = document.getElementById('texteInput').value;
+
+  if (!text.trim()) {
+    etat.textContent = '⚠️ Entrez un texte.';
+    return;
+  }
+
+  await audioCtx.resume();
+
+  let frame;
+  try {
+    frame = buildFrameBits(text);
+  } catch (err) {
+    etat.textContent = `❌ ${err.message}`;
+    return;
+  }
+
+  binaire.textContent = frame.visibleBits;
+
+  let t = audioCtx.currentTime + 0.08;
+  tone(CFG.START_FREQ, t, CFG.START_DURATION, 0.20);
+  t += CFG.START_DURATION + CFG.GAP_DURATION;
+
+  for (const bit of frame.encodedBits) {
+    tone(bit === '0' ? CFG.FREQ0 : CFG.FREQ1, t, CFG.BIT_DURATION, 0.16);
+    t += CFG.BIT_DURATION;
+  }
+
+  t += CFG.GAP_DURATION;
+  tone(CFG.END_FREQ, t, CFG.END_DURATION, 0.20);
+
+  const total = (t + CFG.END_DURATION) - audioCtx.currentTime;
+  etat.innerHTML = `Transmission lancée.<br>Octets: ${frame.len} | CRC8: 0x${frame.crc.toString(16).padStart(2, '0')}<br>Durée approx: ${total.toFixed(2)}s`;
+
+  setTimeout(() => {
+    etat.innerHTML += '<br><span class="ok">Terminé ✅</span>';
+  }, Math.max(0, total * 1000));
+}
+
+document.getElementById('sendBtn').addEventListener('click', send);
 </script>
 </body>
 </html>
