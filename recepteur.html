@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Récepteur</title>
+<title>Récepteur Stable</title>
 <style>
 canvas { border:1px solid black; margin-top:10px;}
 </style>
@@ -25,11 +25,12 @@ const START = 4500;
 const END = 5000;
 
 let audioCtx, analyser;
-let receiving = false;
 let noiseLevel = 0;
+
 let bitBuffer = "";
 let firstCopy = null;
 let finalText = "";
+let readingInterval = null;
 
 async function start(){
 
@@ -65,7 +66,7 @@ function calibrate(){
         } else {
             noiseLevel = total/count + 15;
             drawSpectrum();
-            listen();
+            waitForStart();
         }
     }
     measure();
@@ -105,36 +106,47 @@ function getFreq(){
     return index*audioCtx.sampleRate/analyser.fftSize;
 }
 
-function listen(){
+function waitForStart(){
+
+    function check(){
+        const freq = getFreq();
+        if(freq && Math.abs(freq-START)<200){
+            finalText="";
+            bitBuffer="";
+            firstCopy=null;
+
+            setTimeout(()=>{
+                readingInterval = setInterval(readBit, BIT_DURATION);
+            },500); // petit décalage
+        }
+        requestAnimationFrame(check);
+    }
+    check();
+}
+
+function readBit(){
 
     const freq = getFreq();
 
-    if(freq && Math.abs(freq-START)<200){
-        receiving=true;
-        finalText="";
-        bitBuffer="";
+    if(!freq) return;
+
+    if(Math.abs(freq-END)<200){
+        clearInterval(readingInterval);
+        return;
     }
 
-    if(receiving){
-
-        if(freq && Math.abs(freq-FREQ0)<150){
-            addBit("0");
-        }
-        else if(freq && Math.abs(freq-FREQ1)<150){
-            addBit("1");
-        }
-
-        if(freq && Math.abs(freq-END)<200){
-            receiving=false;
-        }
+    if(Math.abs(freq-FREQ0)<150){
+        processBit("0");
     }
-
-    requestAnimationFrame(listen);
+    else if(Math.abs(freq-FREQ1)<150){
+        processBit("1");
+    }
 }
 
-function addBit(bit){
+function processBit(bit){
 
     bitBuffer += bit;
+
     document.getElementById("affichage").innerText =
         finalText + " [" + bitBuffer + "]";
 
