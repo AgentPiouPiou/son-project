@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<title>Récepteur sonore</title>
+<title>Récepteur binaire</title>
 
 <style>
 body{
@@ -11,43 +11,43 @@ body{
     margin:auto;
 }
 
-canvas{
-    width:100%;
-    height:220px;
-    border:1px solid #ccc;
-}
-
 .mono{
     font-family:monospace;
     white-space:pre-wrap;
+}
+
+canvas{
+    width:100%;
+    height:220px;
 }
 </style>
 </head>
 
 <body>
 
-<h1>🎧 Récepteur audio</h1>
+<h1>🎧 Récepteur binaire</h1>
 
-<button onclick="start()">Démarrer réception</button>
+<button onclick="start()">Démarrer</button>
 
-<h3>Message reçu progressivement</h3>
-
+<h3>Texte reçu</h3>
 <p id="message" class="mono"></p>
 
-<h3>Spectre</h3>
 <canvas id="viz"></canvas>
 
 <script>
 
 const audioCtx=new AudioContext();
 
-const FREQUENCIES=[
-800,1200,1600,2000,2400,2800,3200,4000
-];
+const BIT_DURATION=0.035;
+
+const FREQ0=1200;
+const FREQ1=2400;
+
+const PREAMBLE="10101011";
 
 let analyser;
 
-/* Detection énergie */
+/* Energy */
 
 function energyAround(freq){
 
@@ -70,52 +70,55 @@ function energyAround(freq){
     return count?sum/count:0;
 }
 
-let bufferMessage="";
-let lastSymbolTime=0;
+let bufferBits="";
 
-/* Detection loop */
+/* Detection */
 
 function detectLoop(){
 
-    let best=-1;
-    let bestIdx=-1;
+    const e0=energyAround(FREQ0);
+    const e1=energyAround(FREQ1);
 
-    FREQUENCIES.forEach((f,i)=>{
-
-        const e=energyAround(f);
-
-        if(e>best){
-            best=e;
-            bestIdx=i;
-        }
-    });
-
-    if(best>120 && bestIdx>=0){
-
-        const letter=
-            String.fromCharCode(
-                bestIdx + "A".charCodeAt(0)
-            );
-
-        bufferMessage+=letter;
-
-        document.getElementById("message").innerHTML=
-            bufferMessage;
-
-        lastSymbolTime=performance.now();
+    if(e0>120 || e1>120){
+        bufferBits+= e1>e0 ? "1":"0";
     }
+
+    document.getElementById("message").innerHTML=
+        bufferBits;
 
     requestAnimationFrame(detectLoop);
 }
 
-/* Visualisation */
+/* Start mic */
+
+async function start(){
+
+    const stream=await navigator.mediaDevices.getUserMedia({
+        audio:{
+            echoCancellation:false,
+            noiseSuppression:false,
+            autoGainControl:false
+        }
+    });
+
+    const source=audioCtx.createMediaStreamSource(stream);
+
+    analyser=audioCtx.createAnalyser();
+    analyser.fftSize=4096;
+
+    source.connect(analyser);
+
+    detectLoop();
+}
+
+/* Visualization */
 
 function visualize(){
 
     const canvas=document.getElementById("viz");
     const ctx=canvas.getContext("2d");
 
-    const buffer=new Uint8Array(analyser.frequencyBinCount);
+    const buffer=new Uint8Array(1024);
 
     function draw(){
 
@@ -143,30 +146,7 @@ function visualize(){
     draw();
 }
 
-/* Start microphone */
-
-async function start(){
-
-    const stream=await navigator.mediaDevices.getUserMedia({
-        audio:{
-            echoCancellation:false,
-            noiseSuppression:false,
-            autoGainControl:false
-        }
-    });
-
-    const source=audioCtx.createMediaStreamSource(stream);
-
-    analyser=audioCtx.createAnalyser();
-    analyser.fftSize=4096;
-    analyser.smoothingTimeConstant=0.25;
-
-    source.connect(analyser);
-
-    detectLoop();
-    visualize();
-}
-
 </script>
+
 </body>
 </html>

@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<title>Émetteur sonore</title>
+<title>Émetteur binaire</title>
 
 <style>
 body{
@@ -18,18 +18,13 @@ textarea{
 
 .bold{
     font-weight:bold;
-    font-size:1.2em;
-}
-
-.mono{
-    font-family:monospace;
 }
 </style>
 </head>
 
 <body>
 
-<h1>🔊 Émetteur audio</h1>
+<h1>🔊 Émetteur binaire</h1>
 
 <textarea id="texte"></textarea>
 
@@ -37,47 +32,59 @@ textarea{
 
 <button onclick="send()">Envoyer</button>
 
-<h3>Caractère envoyé en temps réel</h3>
+<h3>Envoi en temps réel</h3>
 <p id="currentChar" class="bold"></p>
 
-<h3>Information transmission</h3>
-<p id="info" class="mono"></p>
+<p id="info"></p>
 
 <script>
 
 const audioCtx=new AudioContext();
 
-/* Fréquences distinctes */
-const FREQUENCIES=[
-800,1200,1600,2000,2400,2800,3200,4000
-];
+/* Protocol */
 
-const SYMBOL_DURATION=0.06;
-const GAP=0.015;
-const INIT_FREQ=600;
+const BIT_DURATION=0.035;
+const GAP=0.005;
 
-/* Tone generator */
+const FREQ0=1200;
+const FREQ1=2400;
 
-function tone(freq,start,dur,gain=0.22){
+const START_FREQ=800;
+const END_FREQ=3000;
+
+const PREAMBLE="10101011";
+
+/* Tone */
+
+function tone(freq,start,dur){
 
     const osc=audioCtx.createOscillator();
-    const g=audioCtx.createGain();
+    const gain=audioCtx.createGain();
 
     osc.frequency.value=freq;
     osc.type="sine";
 
-    g.gain.setValueAtTime(0.00001,start);
-    g.gain.linearRampToValueAtTime(gain,start+0.005);
-    g.gain.linearRampToValueAtTime(0.00001,start+dur);
+    gain.gain.setValueAtTime(0.00001,start);
+    gain.gain.linearRampToValueAtTime(0.2,start+0.003);
+    gain.gain.linearRampToValueAtTime(0.00001,start+dur);
 
-    osc.connect(g);
-    g.connect(audioCtx.destination);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
 
     osc.start(start);
     osc.stop(start+dur);
 }
 
-/* Transmission */
+/* Encode */
+
+function textToBinary(text){
+
+    return Array.from(
+        new TextEncoder().encode(text)
+    ).map(b=>b.toString(2).padStart(8,"0")).join("");
+}
+
+/* Send */
 
 async function send(){
 
@@ -87,64 +94,45 @@ async function send(){
 
     if(!text.trim()) return;
 
-    const chars=text.split("");
+    const payload=textToBinary(text);
 
-    const totalTime=
-        0.8 + 1.0 + chars.length*(SYMBOL_DURATION+GAP);
+    const frame=
+        PREAMBLE +
+        payload.length.toString(2).padStart(16,"0") +
+        payload;
 
-    const startTime=audioCtx.currentTime+0.1;
+    let t=audioCtx.currentTime+0.1;
 
-    /* START tone */
-    tone(INIT_FREQ,startTime,0.8);
+    tone(START_FREQ,t,0.8);
 
-    let symbolStart=startTime+0.8+0.2;
+    t+=1.0;
 
     let index=0;
 
-    function renderUI(){
+    function transmit(){
 
-        let elapsed=audioCtx.currentTime-startTime;
-        let remaining=Math.max(0,totalTime-elapsed);
+        if(index>=frame.length) return;
 
-        if(index<chars.length){
-            document.getElementById("currentChar").innerHTML=
-                "Envoi : <b>"+chars[index]+"</b>";
-        }
+        const bit=frame[index];
 
-        document.getElementById("info").innerHTML=
-            "Transmission en cours<br>"+
-            "Caractère "+(index+1)+"/"+chars.length+"<br>"+
-            "Temps restant ≈ "+remaining.toFixed(2)+" s";
+        document.getElementById("currentChar").innerHTML=
+            "Bit envoyé : <b>"+bit+"</b>";
 
-        if(elapsed<totalTime){
-            requestAnimationFrame(renderUI);
-        }
-    }
-
-    renderUI();
-
-    function transmitNext(){
-
-        if(index>=chars.length) return;
-
-        const char=chars[index];
-
-        const code=char.charCodeAt(0)%FREQUENCIES.length;
-
-        tone(FREQUENCIES[code],symbolStart,
-             SYMBOL_DURATION);
+        tone(
+            bit==="0"?FREQ0:FREQ1,
+            t,
+            BIT_DURATION
+        );
 
         index++;
+        t+=BIT_DURATION+GAP;
 
-        symbolStart+=SYMBOL_DURATION+GAP;
-
-        setTimeout(transmitNext,SYMBOL_DURATION*1000);
+        setTimeout(transmit,BIT_DURATION*1000);
     }
 
-    setTimeout(transmitNext,1000);
+    transmit();
 }
 
 </script>
-
 </body>
 </html>
