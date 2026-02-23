@@ -2,83 +2,103 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Émetteur Avancé</title>
+<title>Émetteur</title>
+<style>
+canvas { border:1px solid black; }
+.bold { font-weight:bold; color:red; }
+</style>
 </head>
 <body>
 
-<h2>Émetteur Avancé</h2>
+<h2>Émetteur</h2>
 
 <input id="texte" placeholder="Tape ton texte">
 <button onclick="envoyer()">Envoyer</button>
 
-<p id="info"></p>
+<p id="affichage"></p>
+<p id="binaire"></p>
+
+<canvas id="spectre" width="600" height="200"></canvas>
 
 <script>
 
-const BIT_DURATION = 0.11;
-
-const FREQ = {
-  "00": 3200,
-  "01": 3600,
-  "10": 4000,
-  "11": 4400
-};
-
+const BIT_DURATION = 0.15;
+const FREQ0 = 3500;
+const FREQ1 = 4200;
 const START = 5000;
 const END = 5500;
 
-function textToBinary(text){
-    return text.split('')
-        .map(c => c.charCodeAt(0).toString(2).padStart(8,'0'))
-        .join('');
+let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let analyser = audioCtx.createAnalyser();
+analyser.fftSize = 2048;
+
+let sourceNode = audioCtx.createMediaStreamSource(
+    new MediaStream()
+);
+
+function drawSpectrum(){
+
+    const canvas = document.getElementById("spectre");
+    const ctx = canvas.getContext("2d");
+    const buffer = new Uint8Array(analyser.frequencyBinCount);
+
+    function draw(){
+        requestAnimationFrame(draw);
+        analyser.getByteFrequencyData(buffer);
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+
+        for(let i=0;i<buffer.length;i++){
+            const value = buffer[i];
+            ctx.fillRect(i, canvas.height, 2, -value);
+        }
+    }
+
+    draw();
 }
 
-function crc8(binary){
-    let crc = 0;
-    for(let i=0;i<binary.length;i++){
-        crc ^= parseInt(binary[i]);
-    }
-    return crc.toString(2).padStart(8,"0");
+drawSpectrum();
+
+function textToBinary(text){
+    return text.split('')
+        .map(c => c.charCodeAt(0).toString(2).padStart(8,'0'));
 }
 
 async function envoyer(){
 
     const texte = document.getElementById("texte").value;
-    let binary = textToBinary(texte);
+    const binaryArray = textToBinary(texte);
 
-    const crc = crc8(binary);
-    binary += crc;
-
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     let time = audioCtx.currentTime;
 
     function tone(freq, dur){
         const osc = audioCtx.createOscillator();
         osc.frequency.value = freq;
-        osc.connect(audioCtx.destination);
+        osc.connect(analyser);
+        analyser.connect(audioCtx.destination);
         osc.start(time);
         osc.stop(time + dur);
         time += dur;
     }
 
-    document.getElementById("info").innerText =
-        "Transmission...";
+    tone(START, 0.8);
 
-    tone(START, 1);
+    for(let i=0;i<binaryArray.length;i++){
 
-    for(let i=0;i<binary.length;i+=2){
+        const lettres = texte.split('');
+        document.getElementById("affichage").innerHTML =
+            lettres.map((l,index)=>
+                index===i ? `<span class="bold">${l}</span>` : l
+            ).join('');
 
-        const bits = binary.slice(i,i+2);
-        const freq = FREQ[bits];
+        document.getElementById("binaire").innerText =
+            binaryArray[i];
 
-        tone(freq, BIT_DURATION);
-        tone(freq, BIT_DURATION); // répétition
+        for(let bit of binaryArray[i]){
+            tone(bit==="0"?FREQ0:FREQ1, BIT_DURATION);
+        }
     }
 
-    tone(END, 1);
-
-    document.getElementById("info").innerText =
-        "Terminé";
+    tone(END, 0.8);
 }
 
 </script>
