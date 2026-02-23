@@ -2,21 +2,16 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Émetteur</title>
+<title>Émetteur Ultra Stable</title>
 <style>
 .bold { font-weight:bold; color:red; }
-.progress {
-  width:100%; height:20px; background:#ddd; margin-top:10px;
-}
-.bar {
-  height:100%; width:0%; background:green;
-}
-canvas { border:1px solid black; margin-top:10px;}
+.progress { width:100%; height:20px; background:#ddd; margin-top:10px;}
+.bar { height:100%; width:0%; background:green;}
 </style>
 </head>
 <body>
 
-<h2>Émetteur</h2>
+<h2>Émetteur Ultra Stable</h2>
 
 <input id="texteInput" placeholder="Tape ton texte">
 <button onclick="envoyer()">Envoyer</button>
@@ -27,20 +22,15 @@ canvas { border:1px solid black; margin-top:10px;}
 <div class="progress"><div class="bar" id="bar"></div></div>
 <p id="percent">0%</p>
 
-<canvas id="spectre" width="600" height="150"></canvas>
-
 <script>
 
-const BIT_DURATION = 0.18;
-const FREQ0 = 3000;
-const FREQ1 = 3800;
-const START = 4500;
-const END = 5000;
+const BIT_DURATION = 0.25;
+const FREQ0 = 1500;
+const FREQ1 = 5000;
+const START = 7000;
+const END = 9000;
 
 let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-let analyser = audioCtx.createAnalyser();
-analyser.fftSize = 2048;
-analyser.connect(audioCtx.destination);
 
 function textToBinary(text){
     return text.split('').map(c =>
@@ -51,27 +41,10 @@ function textToBinary(text){
 function tone(freq,dur,time){
     const osc = audioCtx.createOscillator();
     osc.frequency.value = freq;
-    osc.connect(analyser);
+    osc.connect(audioCtx.destination);
     osc.start(time);
     osc.stop(time+dur);
 }
-
-function drawSpectrum(){
-    const canvas = document.getElementById("spectre");
-    const ctx = canvas.getContext("2d");
-    const buffer = new Uint8Array(analyser.frequencyBinCount);
-
-    function draw(){
-        requestAnimationFrame(draw);
-        analyser.getByteFrequencyData(buffer);
-        ctx.clearRect(0,0,canvas.width,canvas.height);
-        for(let i=0;i<buffer.length;i++){
-            ctx.fillRect(i,canvas.height,2,-buffer[i]);
-        }
-    }
-    draw();
-}
-drawSpectrum();
 
 async function envoyer(){
 
@@ -83,8 +56,8 @@ async function envoyer(){
 
     let time = audioCtx.currentTime;
 
-    tone(START,1,time);
-    time+=1;
+    tone(START,1.2,time);
+    time+=1.2;
 
     for(let i=0;i<binaries.length;i++){
 
@@ -99,12 +72,9 @@ async function envoyer(){
                 index===i ? `<span class="bold">${b}</span>` : b
             ).join(" ");
 
-        for(let repeat=0;repeat<2;repeat++){ // double envoi
-
-            for(let bit of binaries[i]){
-                tone(bit==="0"?FREQ0:FREQ1,BIT_DURATION,time);
-                time+=BIT_DURATION;
-            }
+        for(let bit of binaries[i]){
+            tone(bit==="0"?FREQ0:FREQ1,BIT_DURATION,time);
+            time+=BIT_DURATION;
         }
 
         let progress = Math.round(((i+1)/binaries.length)*100);
@@ -112,7 +82,7 @@ async function envoyer(){
         document.getElementById("percent").innerText = progress+"%";
     }
 
-    tone(END,1,time);
+    tone(END,1.2,time);
 }
 
 </script>
