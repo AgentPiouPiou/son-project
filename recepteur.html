@@ -2,28 +2,29 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Récepteur Sync</title>
+<title>Récepteur Stable</title>
 </head>
 <body>
 
-<h2>Récepteur avec Synchronisation</h2>
-<button onclick="start()">Démarrer</button>
+<h2>Récepteur</h2>
+
+<button onclick="start()">Démarrer (Calibration 5s)</button>
 
 <p id="affichage"></p>
 
 <script>
 
-const BIT_DURATION = 200;
 const FREQ0 = 1200;
-const FREQ1 = 2200;
-const START = 3000;
-const END = 3500;
-
+const FREQ1 = 5000;
+const START = 7000;
+const END = 9000;
 const PREAMBLE = "11110000";
 
 let audioCtx, analyser;
+let noiseFloor = 0;
+
 let receiving = false;
-let bitStream = "";
+let bufferBits = "";
 let finalText = "";
 
 async function start(){
@@ -40,40 +41,68 @@ async function start(){
     const source = audioCtx.createMediaStreamSource(stream);
 
     analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 2048;
+    analyser.fftSize = 4096;
+
     source.connect(analyser);
 
-    listen();
+    calibrateNoise();
 }
 
-function getFreq(){
+function calibrateNoise(){
+
+    const buffer = new Uint8Array(analyser.frequencyBinCount);
+
+    let total=0;
+    let count=0;
+    const start = Date.now();
+
+    function measure(){
+
+        analyser.getByteFrequencyData(buffer);
+
+        total += Math.max(...buffer);
+        count++;
+
+        if(Date.now()-start < 5000){
+            requestAnimationFrame(measure);
+        }
+        else{
+            noiseFloor = total/count + 15;
+            listen();
+        }
+    }
+
+    measure();
+}
+
+function bandEnergy(freq){
 
     const buffer = new Uint8Array(analyser.frequencyBinCount);
     analyser.getByteFrequencyData(buffer);
 
-    let max=0,index=0;
+    const nyquist = audioCtx.sampleRate/2;
+    const index = Math.round(freq/nyquist * buffer.length);
 
-    for(let i=0;i<buffer.length;i++){
-        if(buffer[i]>max){
-            max=buffer[i];
-            index=i;
-        }
+    let energy = 0;
+
+    for(let i=index-4;i<=index+4;i++){
+        if(buffer[i]) energy+=buffer[i];
     }
 
-    return index * audioCtx.sampleRate / analyser.fftSize;
+    return energy;
 }
 
 function listen(){
 
-    const freq = getFreq();
-
     if(!receiving){
-        if(Math.abs(freq-START)<200){
+
+        if(bandEnergy(START) > noiseFloor){
             receiving=true;
             finalText="";
-            bitStream="";
-            setTimeout(readBit,BIT_DURATION);
+            bufferBits="";
+            setTimeout(readBit,250);
         }
+
     }
 
     requestAnimationFrame(listen);
@@ -83,38 +112,39 @@ function readBit(){
 
     if(!receiving) return;
 
-    const freq = getFreq();
-
-    if(Math.abs(freq-END)<200){
+    if(bandEnergy(END) > noiseFloor){
         receiving=false;
         return;
     }
 
-    let bit=null;
+    let e0 = bandEnergy(FREQ0);
+    let e1 = bandEnergy(FREQ1);
 
-    if(Math.abs(freq-FREQ0)<150) bit="0";
-    else if(Math.abs(freq-FREQ1)<150) bit="1";
+    if(e0 < noiseFloor && e1 < noiseFloor){
+        setTimeout(readBit,250);
+        return;
+    }
 
-    if(bit){
-        bitStream+=bit;
+    let bit = e0 > e1 ? "0" : "1";
 
-        document.getElementById("affichage").innerText =
-            finalText + " ["+bitStream+"]";
+    bufferBits += bit;
 
-        // Cherche le préambule
-        if(bitStream.endsWith(PREAMBLE)){
-            bitStream="";
+    document.getElementById("affichage").innerText =
+        finalText + " [" + bufferBits + "]";
+
+    if(bufferBits.length === 8){
+
+        if(bufferBits.startsWith(PREAMBLE)){
+            bufferBits = bufferBits.slice(8);
         }
-
-        // Quand on a 8 bits après préambule
-        if(bitStream.length===8){
+        else{
             finalText +=
-                String.fromCharCode(parseInt(bitStream,2));
-            bitStream="";
+                String.fromCharCode(parseInt(bufferBits,2));
+            bufferBits="";
         }
     }
 
-    setTimeout(readBit,BIT_DURATION);
+    setTimeout(readBit,250);
 }
 
 </script>

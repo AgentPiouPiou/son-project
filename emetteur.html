@@ -2,76 +2,75 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Émetteur Sync</title>
+<title>Émetteur Stable</title>
 <style>
-.bold { font-weight:bold; color:red; }
+.bold{font-weight:bold;color:red;}
 </style>
 </head>
 <body>
 
-<h2>Émetteur avec Synchronisation</h2>
+<h2>Émetteur</h2>
 
-<input id="texteInput" placeholder="Tape ton texte">
-<button onclick="envoyer()">Envoyer</button>
+<input id="texteInput" placeholder="Texte">
+<button onclick="send()">Envoyer</button>
 
 <p id="texteAffiche"></p>
 <p id="binaireAffiche"></p>
 
 <script>
 
-const BIT_DURATION = 0.2;
+const BIT_DURATION = 0.25;
 const FREQ0 = 1200;
-const FREQ1 = 2200;
-const START = 3000;
-const END = 3500;
+const FREQ1 = 5000;
+const START = 7000;
+const END = 9000;
 
 const PREAMBLE = "11110000";
 
-let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let audioCtx = new (window.AudioContext||window.webkitAudioContext)();
 
-function textToBinary(text){
-    return text.split('').map(c =>
+function textToBinary(t){
+    return t.split('').map(c =>
         c.charCodeAt(0).toString(2).padStart(8,'0')
     );
 }
 
 function tone(freq,dur,time){
-    const osc = audioCtx.createOscillator();
+    let osc = audioCtx.createOscillator();
     osc.frequency.value = freq;
     osc.connect(audioCtx.destination);
     osc.start(time);
     osc.stop(time+dur);
 }
 
-async function envoyer(){
+async function send(){
 
-    const texte = document.getElementById("texteInput").value;
-    const binaries = textToBinary(texte);
+    let text = document.getElementById("texteInput").value;
+    let binaries = textToBinary(text);
 
     let time = audioCtx.currentTime;
 
-    tone(START,1,time);
-    time+=1;
+    tone(START,1.2,time);
+    time+=1.2;
 
     for(let i=0;i<binaries.length;i++){
 
         document.getElementById("texteAffiche").innerHTML =
-            texte.split('').map((l,index)=>
+            text.split('').map((l,index)=>
                 index===i ? `<span class="bold">${l}</span>` : l
             ).join('');
 
-        document.getElementById("binaireAffiche").innerText =
-            PREAMBLE + " " + binaries[i];
+        let full = PREAMBLE + binaries[i];
 
-        let fullByte = PREAMBLE + binaries[i];
+        document.getElementById("binaireAffiche").innerText = full;
 
-        for(let bit of fullByte){
+        for(let bit of full){
             tone(bit==="0"?FREQ0:FREQ1,BIT_DURATION,time);
             time+=BIT_DURATION;
         }
     }
 
-    tone(END,1,time);
+    tone(END,1.2,time);
 }
 
 </script>
