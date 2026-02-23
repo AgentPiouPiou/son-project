@@ -2,112 +2,152 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<title>Émetteur décimal</title>
+<title>Émetteur sonore</title>
 
 <style>
 body{
-  font-family:Arial;
-  max-width:800px;
-  margin:auto;
+    font-family:Arial;
+    max-width:900px;
+    margin:auto;
 }
 
 textarea{
-  width:100%;
-  min-height:100px;
+    width:100%;
+    min-height:120px;
 }
 
-canvas{
-  width:100%;
-  height:200px;
-  border:1px solid #ccc;
+.bold{
+    font-weight:bold;
+    font-size:1.2em;
+}
+
+.mono{
+    font-family:monospace;
 }
 </style>
 </head>
 
 <body>
 
-<h1>🔊 Émetteur décimal</h1>
+<h1>🔊 Émetteur audio</h1>
 
-<textarea id="texte" placeholder="Entrez des chiffres"></textarea>
+<textarea id="texte"></textarea>
 
 <br><br>
 
 <button onclick="send()">Envoyer</button>
 
-<h3>Visualisation émission</h3>
-<canvas id="vizTx"></canvas>
+<h3>Information transmission</h3>
 
-<p id="etat"></p>
+<p id="info" class="mono"></p>
+
+<h3>Caractère envoyé en temps réel</h3>
+
+<p id="currentChar" class="bold"></p>
 
 <script>
 
 const audioCtx=new AudioContext();
 
-const SYMBOL_FREQS=[500,700,900,1100,1300,1500,1700,1900,2100,2300];
+/* Fréquences très séparées pour stabilité */
+const FREQUENCIES=[
+800,
+1200,
+1600,
+2000,
+2400,
+2800,
+3200,
+4000
+];
 
-const INIT_FREQ=300;
+const SYMBOL_DURATION=0.06;
+const GAP=0.015;
+const INIT_FREQ=600;
 
-const SYMBOL_DURATION=0.05;
-const GAP=0.01;
+/* Tone generator */
 
-function tone(freq,start,dur,gain=0.2){
+function tone(freq,start,dur,gain=0.22){
 
-  const osc=audioCtx.createOscillator();
-  const g=audioCtx.createGain();
+    const osc=audioCtx.createOscillator();
+    const g=audioCtx.createGain();
 
-  osc.frequency.value=freq;
-  osc.type="sine";
+    osc.frequency.value=freq;
+    osc.type="sine";
 
-  g.gain.setValueAtTime(0.00001,start);
-  g.gain.linearRampToValueAtTime(gain,start+0.005);
-  g.gain.linearRampToValueAtTime(0.00001,start+dur);
+    g.gain.setValueAtTime(0.00001,start);
+    g.gain.linearRampToValueAtTime(gain,start+0.005);
+    g.gain.linearRampToValueAtTime(0.00001,start+dur);
 
-  osc.connect(g);
-  g.connect(audioCtx.destination);
+    osc.connect(g);
+    g.connect(audioCtx.destination);
 
-  osc.start(start);
-  osc.stop(start+dur);
+    osc.start(start);
+    osc.stop(start+dur);
 }
 
-function drawEmitter(freq){
-
-  const canvas=document.getElementById("vizTx");
-  const ctx=canvas.getContext("2d");
-
-  ctx.fillStyle="white";
-  ctx.fillRect(0,0,canvas.width,canvas.height);
-
-  ctx.fillStyle="black";
-  ctx.fillText("Emission : "+freq+" Hz",10,20);
-}
+/* Transmission */
 
 async function send(){
 
-  await audioCtx.resume();
+    await audioCtx.resume();
 
-  const text=document.getElementById("texte").value;
+    const text=document.getElementById("texte").value;
 
-  const digits=text.split("").filter(c=>!isNaN(c));
+    if(!text.trim()) return;
 
-  let t=audioCtx.currentTime+0.1;
+    let chars=text.split("");
 
-  tone(INIT_FREQ,t,0.8,0.25);
-  t+=1.0;
+    let totalTimeEstimate=
+        0.8 + 1.0 + chars.length*(SYMBOL_DURATION+GAP);
 
-  for(const d of digits){
+    document.getElementById("info").innerHTML=
+        "Texte longueur : "+chars.length+"<br>"+
+        "Temps total estimé : "+totalTimeEstimate.toFixed(2)+" s<br>"+
+        "Temps restant dynamique affiché pendant émission";
 
-    const freq=SYMBOL_FREQS[parseInt(d)];
+    let t=audioCtx.currentTime+0.1;
 
-    tone(freq,t,SYMBOL_DURATION,0.2);
+    tone(INIT_FREQ,t,0.8);
 
-    drawEmitter(freq);
+    t+=1.0;
 
-    t+=SYMBOL_DURATION+GAP;
-  }
+    let index=0;
 
-  document.getElementById("etat").textContent="Transmission lancée";
+    function transmitNext(){
+
+        if(index>=chars.length) return;
+
+        let char=chars[index];
+
+        document.getElementById("currentChar").innerHTML=
+            "Envoi : <b>"+char+"</b>";
+
+        let code=char.charCodeAt(0)%FREQUENCIES.length;
+
+        tone(FREQUENCIES[code],t,SYMBOL_DURATION);
+
+        let elapsed=index*(SYMBOL_DURATION+GAP);
+
+        let remaining=
+            totalTimeEstimate-elapsed;
+
+        document.getElementById("info").innerHTML=
+            "Transmission en cours<br>"+
+            "Caractère "+(index+1)+"/"+chars.length+"<br>"+
+            "Temps restant ≈ "+remaining.toFixed(2)+" s";
+
+        index++;
+
+        t+=SYMBOL_DURATION+GAP;
+
+        setTimeout(transmitNext,SYMBOL_DURATION*1000);
+    }
+
+    transmitNext();
 }
 
 </script>
+
 </body>
 </html>

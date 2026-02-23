@@ -2,35 +2,36 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<title>Récepteur décimal</title>
+<title>Récepteur sonore</title>
 
 <style>
 body{
-  font-family:Arial;
-  max-width:800px;
-  margin:auto;
+    font-family:Arial;
+    max-width:900px;
+    margin:auto;
 }
 
 canvas{
-  width:100%;
-  height:220px;
-  border:1px solid #ccc;
+    width:100%;
+    height:220px;
+    border:1px solid #ccc;
 }
 
 .mono{
-  font-family:monospace;
+    font-family:monospace;
 }
 </style>
 </head>
 
 <body>
 
-<h1>🎧 Récepteur décimal</h1>
+<h1>🎧 Récepteur audio</h1>
 
 <button onclick="start()">Démarrer réception</button>
 
-<h3>Texte reçu en temps réel</h3>
-<p id="liveText" class="mono"></p>
+<h3>Message reçu progressivement</h3>
+
+<p id="message" class="mono"></p>
 
 <h3>Spectre</h3>
 <canvas id="viz"></canvas>
@@ -39,134 +40,128 @@ canvas{
 
 const audioCtx=new AudioContext();
 
-const INIT_FREQ=300;
-
-const SYMBOL_FREQS=[
-500,700,900,1100,1300,
-1500,1700,1900,2100,2300
+const FREQUENCIES=[
+800,
+1200,
+1600,
+2000,
+2400,
+2800,
+3200,
+4000
 ];
 
 let analyser;
 
-/* ENERGY DETECTOR */
+/* Detection énergétique */
 
 function energyAround(freq){
 
-  const buffer=new Uint8Array(analyser.frequencyBinCount);
-  analyser.getByteFrequencyData(buffer);
+    const buffer=new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(buffer);
 
-  const nyquist=audioCtx.sampleRate/2;
+    const nyquist=audioCtx.sampleRate/2;
 
-  const idx=Math.round((freq/nyquist)*buffer.length);
+    const idx=Math.round((freq/nyquist)*buffer.length);
 
-  let sum=0;
-  let count=0;
+    let sum=0,count=0;
 
-  for(let i=idx-2;i<=idx+2;i++){
-    if(buffer[i]){
-      sum+=buffer[i];
-      count++;
+    for(let i=idx-3;i<=idx+3;i++){
+        if(buffer[i]){
+            sum+=buffer[i];
+            count++;
+        }
     }
-  }
 
-  return count?sum/count:0;
+    return count?sum/count:0;
 }
 
-let messageBuffer="";
-let lastSymbolTime=0;
+let bufferMessage="";
 
 function detectLoop(){
-
-  const now=performance.now();
-
-  if(now-lastSymbolTime>60){
-
-    const initEnergy=energyAround(INIT_FREQ);
-
-    if(initEnergy>110){
-      messageBuffer="";
-    }
 
     let best=-1;
     let bestIdx=-1;
 
-    SYMBOL_FREQS.forEach((f,i)=>{
+    FREQUENCIES.forEach((f,i)=>{
 
-      const e=energyAround(f);
+        let e=energyAround(f);
 
-      if(e>best){
-        best=e;
-        bestIdx=i;
-      }
+        if(e>best){
+            best=e;
+            bestIdx=i;
+        }
     });
 
     if(best>120 && bestIdx>=0){
-      messageBuffer+=bestIdx.toString();
-      document.getElementById("liveText").textContent=messageBuffer;
-      lastSymbolTime=now;
-    }
-  }
+        bufferMessage+=String.fromCharCode(
+            bestIdx + "A".charCodeAt(0)
+        );
 
-  requestAnimationFrame(detectLoop);
+        document.getElementById("message").innerHTML=
+            bufferMessage;
+    }
+
+    requestAnimationFrame(detectLoop);
 }
 
-/* VISUALISATION */
+/* Visualisation */
 
 function visualize(){
 
-  const canvas=document.getElementById("viz");
-  const ctx=canvas.getContext("2d");
+    const canvas=document.getElementById("viz");
+    const ctx=canvas.getContext("2d");
 
-  const buffer=new Uint8Array(analyser.frequencyBinCount);
+    const buffer=new Uint8Array(analyser.frequencyBinCount);
 
-  function draw(){
+    function draw(){
 
-    analyser.getByteFrequencyData(buffer);
+        analyser.getByteFrequencyData(buffer);
 
-    ctx.fillStyle="white";
-    ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle="white";
+        ctx.fillRect(0,0,canvas.width,canvas.height);
 
-    ctx.beginPath();
+        ctx.beginPath();
 
-    for(let i=0;i<buffer.length;i++){
+        for(let i=0;i<buffer.length;i++){
 
-      const x=i/buffer.length*canvas.width;
-      const y=canvas.height-buffer[i];
+            const x=i/buffer.length*canvas.width;
+            const y=canvas.height-buffer[i];
 
-      if(i===0) ctx.moveTo(x,y);
-      else ctx.lineTo(x,y);
+            if(i===0) ctx.moveTo(x,y);
+            else ctx.lineTo(x,y);
+        }
+
+        ctx.stroke();
+
+        requestAnimationFrame(draw);
     }
 
-    ctx.stroke();
-
-    requestAnimationFrame(draw);
-  }
-
-  draw();
+    draw();
 }
 
-/* START */
+/* Start microphone */
 
 async function start(){
 
-  const stream=await navigator.mediaDevices.getUserMedia({
-    audio:{
-      echoCancellation:false,
-      noiseSuppression:false,
-      autoGainControl:false
-    }
-  });
+    const stream=await navigator.mediaDevices.getUserMedia({
+        audio:{
+            echoCancellation:false,
+            noiseSuppression:false,
+            autoGainControl:false
+        }
+    });
 
-  const source=audioCtx.createMediaStreamSource(stream);
+    const source=audioCtx.createMediaStreamSource(stream);
 
-  analyser=audioCtx.createAnalyser();
-  analyser.fftSize=4096;
-  analyser.smoothingTimeConstant=0.25;
+    analyser=audioCtx.createAnalyser();
+    analyser.fftSize=4096;
+    analyser.smoothingTimeConstant=0.25;
 
-  source.connect(analyser);
+    source.connect(analyser);
 
-  detectLoop();
-  visualize();
+    detectLoop();
+    visualize();
 }
 
 </script>
