@@ -3,298 +3,358 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Récepteur sonore fiable</title>
+<title>Récepteur Fast Audio</title>
+
 <style>
-  body { font-family: Arial, sans-serif; max-width: 900px; margin: 24px auto; line-height: 1.4; }
-  button { padding: 10px 14px; font-weight: 600; cursor: pointer; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
-  .muted { color: #666; }
+body{
+  font-family: Arial, sans-serif;
+  max-width:900px;
+  margin:24px auto;
+}
+
+button{
+  padding:10px 14px;
+  font-weight:600;
+}
+
+.mono{
+  font-family: ui-monospace, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.muted{
+  color:#666;
+}
 </style>
 </head>
+
 <body>
-  <h1>🎧 Récepteur (calibration ambiante)</h1>
-  <p class="muted">Calibration 4 secondes du bruit de la pièce, puis détection START/END + décodage majoritaire ×3 + vérification CRC8.</p>
 
-  <button id="startBtn">Démarrer</button>
+<h1>🎧 Récepteur FAST Calibration</h1>
 
-  <h3>Journal</h3>
-  <p id="log" class="mono">Prêt.</p>
+<button id="startBtn">Démarrer</button>
 
-  <h3>Données</h3>
-  <p><strong>Bits reçus (décodés):</strong></p>
-  <p id="bits" class="mono"></p>
-  <p><strong>Texte final:</strong></p>
-  <p id="text" class="mono"></p>
+<h3>Log</h3>
+<p id="log" class="mono">Prêt.</p>
+
+<h3>Bits</h3>
+<p id="bits" class="mono"></p>
+
+<h3>Texte</h3>
+<p id="text" class="mono"></p>
 
 <script>
-const CFG = {
-  BIT_DURATION: 0.09,
-  START_DURATION: 1.0,
-  GAP_DURATION: 0.2,
-  FREQ0: 1300,
-  FREQ1: 2600,
-  START_FREQ: 3400,
-  END_FREQ: 4200,
-  PREAMBLE: '10101010',
-  SYNC: '11110000'
+
+/* ================= CFG ================= */
+
+const CFG={
+  BIT_DURATION:0.03,
+  START_DURATION:0.5,
+  GAP_DURATION:0.05,
+
+  FREQ0:1300,
+  FREQ1:2600,
+
+  START_FREQ:3400,
+  END_FREQ:4200,
+
+  PREAMBLE:"10101010",
+  SYNC:"11110000",
+
+  REDUNDANCY:2
 };
+
+/* ================= AUDIO STATE ================= */
 
 let audioCtx;
 let analyser;
 let stream;
-let calibration = null;
-let listening = false;
-let receiveTimer = null;
-let startCandidateTime = null;
-let scanRAF = null;
+let calibration=null;
 
-const logEl = document.getElementById('log');
-const bitsEl = document.getElementById('bits');
-const textEl = document.getElementById('text');
+let listening=false;
+let receiveTimer=null;
+let startCandidateTime=null;
+let scanRAF=null;
 
-function setLog(msg) {
-  logEl.textContent = msg;
+const logEl=document.getElementById("log");
+const bitsEl=document.getElementById("bits");
+const textEl=document.getElementById("text");
+
+function setLog(m){
+  logEl.textContent=m;
 }
 
-function crc8(bytes) {
-  let crc = 0x00;
-  for (const b of bytes) {
-    crc ^= b;
-    for (let i = 0; i < 8; i++) {
-      crc = (crc & 0x80) ? ((crc << 1) ^ 0x07) : (crc << 1);
-      crc &= 0xff;
-    }
-  }
-  return crc;
-}
+/* ================= SIGNAL ANALYSIS ================= */
 
-function energyAt(freq, width = 3) {
-  const buffer = new Uint8Array(analyser.frequencyBinCount);
+function energyAt(freq,width=3){
+
+  const buffer=new Uint8Array(analyser.frequencyBinCount);
   analyser.getByteFrequencyData(buffer);
 
-  const nyquist = audioCtx.sampleRate / 2;
-  const idx = Math.round((freq / nyquist) * buffer.length);
+  const nyquist=audioCtx.sampleRate/2;
 
-  let sum = 0;
-  let n = 0;
-  for (let i = idx - width; i <= idx + width; i++) {
-    if (i >= 0 && i < buffer.length) {
-      sum += buffer[i];
+  const idx=Math.round((freq/nyquist)*buffer.length);
+
+  let sum=0;
+  let n=0;
+
+  for(let i=idx-width;i<=idx+width;i++){
+    if(i>=0 && i<buffer.length){
+      sum+=buffer[i];
       n++;
     }
   }
-  return n ? (sum / n) : 0;
+
+  return n?sum/n:0;
 }
 
-async function calibrateAmbient(ms = 4000) {
-  setLog('Calibration ambiante en cours...');
+/* ================= CALIBRATION ================= */
 
-  const tracks = {
-    f0: [], f1: [], fs: [], fe: []
-  };
+async function calibrateAmbient(ms=4000){
 
-  const endAt = performance.now() + ms;
+  setLog("Calibration...");
 
-  return new Promise(resolve => {
-    function step() {
+  const tracks={f0:[],f1:[],fs:[],fe:[]};
+
+  const end=performance.now()+ms;
+
+  return new Promise(resolve=>{
+
+    function step(){
+
       tracks.f0.push(energyAt(CFG.FREQ0));
       tracks.f1.push(energyAt(CFG.FREQ1));
       tracks.fs.push(energyAt(CFG.START_FREQ));
       tracks.fe.push(energyAt(CFG.END_FREQ));
 
-      if (performance.now() < endAt) {
+      if(performance.now()<end){
         requestAnimationFrame(step);
-      } else {
-        const stats = (arr) => {
-          const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
-          const variance = arr.reduce((a, b) => a + (b - mean) ** 2, 0) / arr.length;
-          const std = Math.sqrt(variance);
-          return { mean, std, thr: mean + Math.max(10, std * 3.2) };
+      }else{
+
+        const stats=arr=>{
+          const mean=arr.reduce((a,b)=>a+b)/arr.length;
+          const variance=arr.reduce((a,b)=>a+(b-mean)**2)/arr.length;
+          const std=Math.sqrt(variance);
+
+          return{
+            thr:mean+Math.max(10,std*3)
+          };
         };
 
         resolve({
-          f0: stats(tracks.f0),
-          f1: stats(tracks.f1),
-          fs: stats(tracks.fs),
-          fe: stats(tracks.fe)
+          f0:stats(tracks.f0),
+          f1:stats(tracks.f1),
+          fs:stats(tracks.fs),
+          fe:stats(tracks.fe)
         });
       }
     }
+
     step();
   });
 }
 
-function majorityDecode(tripleBits) {
-  const out = [];
-  for (let i = 0; i + 2 < tripleBits.length; i += 3) {
-    const chunk = tripleBits.slice(i, i + 3);
-    const ones = (chunk[0] === '1') + (chunk[1] === '1') + (chunk[2] === '1');
-    out.push(ones >= 2 ? '1' : '0');
+/* ================= DECODING ================= */
+
+function majorityDecode(bits,n=CFG.REDUNDANCY){
+
+  let out="";
+
+  for(let i=0;i<bits.length;i+=n){
+
+    let chunk=bits.slice(i,i+n);
+    let ones=0;
+
+    for(const c of chunk)
+      if(c==='1') ones++;
+
+    out+=ones>=n/2?'1':'0';
   }
-  return out.join('');
+
+  return out;
 }
 
-function bitsToBytes(bits) {
-  const bytes = [];
-  for (let i = 0; i + 7 < bits.length; i += 8) {
-    bytes.push(parseInt(bits.slice(i, i + 8), 2));
+function bitsToBytes(bits){
+
+  const bytes=[];
+
+  for(let i=0;i+7<bits.length;i+=8){
+    bytes.push(parseInt(bits.slice(i,i+8),2));
   }
+
   return bytes;
 }
 
-function parseFrame(decodedBits) {
-  const marker = CFG.PREAMBLE + CFG.SYNC;
-  const start = decodedBits.indexOf(marker);
-  if (start < 0) throw new Error('Préambule introuvable.');
+function crc8(bytes){
 
-  const frame = decodedBits.slice(start + marker.length);
-  if (frame.length < 16) throw new Error('Trame incomplète (taille + CRC manquants).');
+  let crc=0;
 
-  const len = parseInt(frame.slice(0, 8), 2);
-  const needed = 8 + (len * 8) + 8;
+  for(const b of bytes){
 
-  if (frame.length < needed) throw new Error('Trame incomplète (payload tronqué).');
+    crc^=b;
 
-  const payloadBits = frame.slice(8, 8 + len * 8);
-  const crcBits = frame.slice(8 + len * 8, 8 + len * 8 + 8);
-
-  const payload = bitsToBytes(payloadBits);
-  const crcRx = parseInt(crcBits, 2);
-  const crcCalc = crc8(payload);
-
-  if (crcRx !== crcCalc) {
-    throw new Error(`CRC invalide: reçu 0x${crcRx.toString(16)}, attendu 0x${crcCalc.toString(16)}.`);
+    for(let i=0;i<8;i++){
+      crc=(crc&0x80)?((crc<<1)^0x07):(crc<<1);
+      crc&=0xff;
+    }
   }
+
+  return crc;
+}
+
+function parseFrame(decoded){
+
+  const marker=CFG.PREAMBLE+CFG.SYNC;
+
+  const start=decoded.indexOf(marker);
+  if(start<0) throw new Error("Préambule absent");
+
+  const frame=decoded.slice(start+marker.length);
+
+  const len=parseInt(frame.slice(0,8),2);
+
+  const needed=8+len*8+8;
+  if(frame.length<needed) throw new Error("Trame tronquée");
+
+  const payloadBits=frame.slice(8,8+len*8);
+  const crcBits=frame.slice(8+len*8,8+len*8+8);
+
+  const payload=bitsToBytes(payloadBits);
+
+  if(crc8(payload)!==parseInt(crcBits,2))
+    throw new Error("CRC invalide");
 
   return new TextDecoder().decode(new Uint8Array(payload));
 }
 
-function stopReceptionLoop() {
-  if (receiveTimer) {
-    clearTimeout(receiveTimer);
-    receiveTimer = null;
-  }
+/* ================= DETECTION ================= */
+
+function scanForStart(){
+
+  if(!analyser||!calibration) return;
+
+  const eStart=energyAt(CFG.START_FREQ);
+  const now=audioCtx.currentTime;
+
+  if(eStart>calibration.fs.thr){
+
+    if(startCandidateTime===null)
+      startCandidateTime=now;
+
+    if((now-startCandidateTime)>=0.25 && !listening){
+
+      listening=true;
+
+      bitsEl.textContent="";
+      textEl.textContent="";
+
+      const firstBit=
+        startCandidateTime+
+        CFG.START_DURATION+
+        CFG.GAP_DURATION+
+        CFG.BIT_DURATION/2;
+
+      launchBitReader(firstBit);
+
+      startCandidateTime=null;
+    }
+
+  }else startCandidateTime=null;
+
+  scanRAF=requestAnimationFrame(scanForStart);
 }
 
-function launchBitReader(firstSampleTime) {
-  let sampleTime = firstSampleTime;
-  let rawBits = '';
+function launchBitReader(firstSampleTime){
 
-  setLog('Réception démarrée.');
+  let sampleTime=firstSampleTime;
+  let rawBits="";
 
-  function readAtSchedule() {
-    if (!listening) return;
+  setLog("Réception démarrée");
 
-    const now = audioCtx.currentTime;
-    const delayMs = Math.max(0, (sampleTime - now) * 1000);
+  function readLoop(){
 
-    receiveTimer = setTimeout(() => {
-      if (!listening) return;
+    if(!listening) return;
 
-      const e0 = energyAt(CFG.FREQ0);
-      const e1 = energyAt(CFG.FREQ1);
-      const ee = energyAt(CFG.END_FREQ);
+    const now=audioCtx.currentTime;
+    const delay=Math.max(0,(sampleTime-now)*1000);
 
-      if (ee > calibration.fe.thr && ee > (e0 + e1) / 2) {
-        listening = false;
-        stopReceptionLoop();
+    receiveTimer=setTimeout(()=>{
 
-        const decoded = majorityDecode(rawBits);
-        bitsEl.textContent = decoded;
+      if(!listening) return;
 
-        try {
-          const text = parseFrame(decoded);
-          textEl.textContent = text;
-          setLog('Message reçu avec CRC valide ✅');
-        } catch (err) {
-          textEl.textContent = '';
-          setLog(`Erreur de décodage: ${err.message}`);
+      const e0=energyAt(CFG.FREQ0);
+      const e1=energyAt(CFG.FREQ1);
+      const ee=energyAt(CFG.END_FREQ);
+
+      if(ee>(calibration.fe.thr||0)){
+
+        listening=false;
+
+        const decoded=majorityDecode(rawBits);
+
+        bitsEl.textContent=decoded;
+
+        try{
+          textEl.textContent=parseFrame(decoded);
+          setLog("Message reçu ✅");
+        }catch(err){
+          setLog(err.message);
         }
 
         return;
       }
 
-      if (e0 > calibration.f0.thr || e1 > calibration.f1.thr) {
-        rawBits += (e1 > e0 ? '1' : '0');
-      }
+      if(e0>e1) rawBits+="0";
+      else rawBits+="1";
 
-      sampleTime += CFG.BIT_DURATION;
-      readAtSchedule();
-    }, delayMs);
+      sampleTime+=CFG.BIT_DURATION;
+
+      readLoop();
+
+    },delay);
   }
 
-  readAtSchedule();
+  readLoop();
 }
 
-function scanForStart() {
-  if (!analyser || !calibration) return;
+/* ================= START ================= */
 
-  const eStart = energyAt(CFG.START_FREQ);
-  const now = audioCtx.currentTime;
+async function start(){
 
-  if (eStart > calibration.fs.thr) {
-    if (startCandidateTime === null) startCandidateTime = now;
-
-    if ((now - startCandidateTime) >= 0.35 && !listening) {
-      listening = true;
-      bitsEl.textContent = '';
-      textEl.textContent = '';
-
-      const firstBit = startCandidateTime + CFG.START_DURATION + CFG.GAP_DURATION + (CFG.BIT_DURATION / 2);
-      launchBitReader(firstBit);
-      startCandidateTime = null;
-    }
-  } else {
-    startCandidateTime = null;
-  }
-
-  scanRAF = requestAnimationFrame(scanForStart);
-}
-
-async function start() {
-  if (audioCtx) {
-    setLog('Déjà démarré.');
+  if(audioCtx){
+    setLog("Déjà démarré");
     return;
   }
 
-  stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false
+  stream=await navigator.mediaDevices.getUserMedia({
+    audio:{
+      echoCancellation:false,
+      noiseSuppression:false,
+      autoGainControl:false
     }
   });
 
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  const source = audioCtx.createMediaStreamSource(stream);
+  audioCtx=new (window.AudioContext||window.webkitAudioContext)();
 
-  analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 8192;
-  analyser.smoothingTimeConstant = 0.15;
+  const source=audioCtx.createMediaStreamSource(stream);
+
+  analyser=audioCtx.createAnalyser();
+  analyser.fftSize=8192;
+  analyser.smoothingTimeConstant=0.15;
 
   source.connect(analyser);
 
-  calibration = await calibrateAmbient(4000);
+  calibration=await calibrateAmbient();
 
-  setLog(
-    'Calibration OK. Seuils: ' +
-    `f0=${calibration.f0.thr.toFixed(1)}, ` +
-    `f1=${calibration.f1.thr.toFixed(1)}, ` +
-    `start=${calibration.fs.thr.toFixed(1)}, ` +
-    `end=${calibration.fe.thr.toFixed(1)}.\nEn attente du START...`
-  );
+  setLog("Calibration OK");
 
   scanForStart();
 }
 
-document.getElementById('startBtn').addEventListener('click', start);
+document.getElementById("startBtn")
+.addEventListener("click",start);
 
-window.addEventListener('beforeunload', () => {
-  stopReceptionLoop();
-  if (scanRAF) cancelAnimationFrame(scanRAF);
-  if (stream) stream.getTracks().forEach(t => t.stop());
-  if (audioCtx) audioCtx.close();
-});
 </script>
 </body>
 </html>
