@@ -4,31 +4,31 @@
 <meta charset="UTF-8">
 <title>Récepteur</title>
 <style>
-canvas { border:1px solid black; }
+canvas { border:1px solid black; margin-top:10px;}
 </style>
 </head>
 <body>
 
 <h2>Récepteur</h2>
+<button onclick="start()">Démarrer (Calibration 3s)</button>
 
-<button onclick="start()">Démarrer</button>
+<p id="affichage"></p>
 
-<p id="bits"></p>
-<p id="texte"></p>
-
-<canvas id="spectre" width="600" height="200"></canvas>
+<canvas id="spectre" width="600" height="150"></canvas>
 
 <script>
 
-const BIT_DURATION = 150;
-const FREQ0 = 3500;
-const FREQ1 = 4200;
-const START = 5000;
-const END = 5500;
+const BIT_DURATION = 180;
+const FREQ0 = 3000;
+const FREQ1 = 3800;
+const START = 4500;
+const END = 5000;
 
 let audioCtx, analyser;
 let receiving = false;
-let currentBits = "";
+let noiseLevel = 0;
+let bitBuffer = "";
+let firstCopy = null;
 let finalText = "";
 
 async function start(){
@@ -43,17 +43,35 @@ async function start(){
 
     audioCtx = new AudioContext();
     const source = audioCtx.createMediaStreamSource(stream);
-
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 2048;
     source.connect(analyser);
 
-    drawSpectrum();
-    listen();
+    calibrate();
+}
+
+function calibrate(){
+
+    const buffer = new Uint8Array(analyser.frequencyBinCount);
+    let total=0,count=0;
+    const startTime = Date.now();
+
+    function measure(){
+        analyser.getByteFrequencyData(buffer);
+        total += Math.max(...buffer);
+        count++;
+        if(Date.now()-startTime < 3000){
+            requestAnimationFrame(measure);
+        } else {
+            noiseLevel = total/count + 15;
+            drawSpectrum();
+            listen();
+        }
+    }
+    measure();
 }
 
 function drawSpectrum(){
-
     const canvas = document.getElementById("spectre");
     const ctx = canvas.getContext("2d");
     const buffer = new Uint8Array(analyser.frequencyBinCount);
@@ -62,54 +80,52 @@ function drawSpectrum(){
         requestAnimationFrame(draw);
         analyser.getByteFrequencyData(buffer);
         ctx.clearRect(0,0,canvas.width,canvas.height);
-
         for(let i=0;i<buffer.length;i++){
-            ctx.fillRect(i, canvas.height, 2, -buffer[i]);
+            ctx.fillRect(i,canvas.height,2,-buffer[i]);
         }
     }
-
     draw();
 }
 
-function getFrequency(){
+function getFreq(){
 
     const buffer = new Uint8Array(analyser.frequencyBinCount);
     analyser.getByteFrequencyData(buffer);
 
-    let max = 0;
-    let index = 0;
-
+    let max=0,index=0;
     for(let i=0;i<buffer.length;i++){
-        if(buffer[i] > max){
-            max = buffer[i];
-            index = i;
+        if(buffer[i]>max){
+            max=buffer[i];
+            index=i;
         }
     }
 
-    return index * audioCtx.sampleRate / analyser.fftSize;
+    if(max<noiseLevel) return null;
+
+    return index*audioCtx.sampleRate/analyser.fftSize;
 }
 
 function listen(){
 
-    const freq = getFrequency();
+    const freq = getFreq();
 
-    if(Math.abs(freq-START)<200){
-        receiving = true;
-        currentBits = "";
-        finalText = "";
+    if(freq && Math.abs(freq-START)<200){
+        receiving=true;
+        finalText="";
+        bitBuffer="";
     }
 
     if(receiving){
 
-        if(Math.abs(freq-FREQ0)<150){
+        if(freq && Math.abs(freq-FREQ0)<150){
             addBit("0");
         }
-        else if(Math.abs(freq-FREQ1)<150){
+        else if(freq && Math.abs(freq-FREQ1)<150){
             addBit("1");
         }
 
-        if(Math.abs(freq-END)<200){
-            receiving = false;
+        if(freq && Math.abs(freq-END)<200){
+            receiving=false;
         }
     }
 
@@ -118,18 +134,25 @@ function listen(){
 
 function addBit(bit){
 
-    currentBits += bit;
-    document.getElementById("bits").innerText = currentBits;
+    bitBuffer += bit;
+    document.getElementById("affichage").innerText =
+        finalText + " [" + bitBuffer + "]";
 
-    if(currentBits.length === 8){
+    if(bitBuffer.length===8){
 
-        const letter =
-            String.fromCharCode(parseInt(currentBits,2));
-
-        finalText += letter;
-        document.getElementById("texte").innerText = finalText;
-
-        currentBits = "";
+        if(firstCopy===null){
+            firstCopy = bitBuffer;
+            bitBuffer="";
+        }
+        else{
+            if(firstCopy===bitBuffer){
+                const letter =
+                    String.fromCharCode(parseInt(bitBuffer,2));
+                finalText+=letter;
+            }
+            firstCopy=null;
+            bitBuffer="";
+        }
     }
 }
 
