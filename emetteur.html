@@ -1,224 +1,144 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Émetteur Fast Audio</title>
+<meta charset="UTF-8"/>
+<title>Émetteur Temps Réel Décimal</title>
 
 <style>
 body{
-  font-family: Arial, sans-serif;
-  max-width:820px;
-  margin:24px auto;
+  font-family:Arial;
+  max-width:900px;
+  margin:auto;
+}
+
+canvas{
+  width:100%;
+  height:220px;
+  border:1px solid #ccc;
 }
 
 textarea{
   width:100%;
-  min-height:120px;
-}
-
-button{
-  padding:10px 14px;
-  font-weight:600;
+  min-height:90px;
 }
 
 .mono{
-  font-family: ui-monospace, monospace;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.ok{
-  color:#0b7a0b;
-  font-weight:bold;
+  font-family:monospace;
+  white-space:pre-wrap;
 }
 </style>
 </head>
 
 <body>
 
-<h1>🔊 Émetteur FAST BFSK</h1>
+<h1>🔊 Émetteur décimal ultrasonique</h1>
 
-<textarea id="texteInput" placeholder="Texte à envoyer"></textarea>
+<textarea id="texte"></textarea>
 
 <br><br>
-<button id="sendBtn">Envoyer ultra rapide</button>
 
-<h3>État</h3>
-<p id="etat" class="mono">Prêt.</p>
+<button onclick="send()">Envoyer</button>
 
-<h3>Binaire</h3>
-<p id="binaire" class="mono"></p>
+<h3>Visualisation émission</h3>
+<canvas id="vizTx"></canvas>
+
+<p id="etat" class="mono"></p>
 
 <script>
 
-/* ================= CONFIG FAST ================= */
+const audioCtx=new AudioContext();
 
-const CFG = {
-  BIT_DURATION: 0.03,
-  START_DURATION: 0.5,
-  END_DURATION: 0.5,
-  GAP_DURATION: 0.05,
+const SYMBOL_FREQS=[
+15000,16000,17000,18000,19000,
+20000,21000,22000,23000,24000
+];
 
-  FREQ0:1300,
-  FREQ1:2600,
-  START_FREQ:3400,
-  END_FREQ:4200,
+const INIT_FREQ=14000;
 
-  PREAMBLE:"10101010",
-  SYNC:"11110000",
+const SYMBOL_DURATION=0.04;
+const GAP=0.01;
 
-  REDUNDANCY:2
-};
+/* ---------------- VISUALISATION ---------------- */
 
-const audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+const canvas=document.getElementById("vizTx");
+const ctx=canvas.getContext("2d");
 
-/* ================= UTILITIES ================= */
+function drawEmitter(freq,time){
 
-function toBits(bytes){
-  return Array.from(bytes)
-    .map(b=>b.toString(2).padStart(8,'0'))
-    .join('');
+  const w=canvas.width;
+  const h=canvas.height;
+
+  ctx.fillStyle="white";
+  ctx.fillRect(0,0,w,h);
+
+  ctx.fillStyle="black";
+
+  ctx.fillText("Emission planifiée",10,20);
+
 }
 
-function crc8(bytes){
-  let crc=0;
+/* ---------------- AUDIO ---------------- */
 
-  for(const b of bytes){
-    crc ^= b;
-
-    for(let i=0;i<8;i++){
-      crc = (crc & 0x80) ? ((crc<<1)^0x07) : (crc<<1);
-      crc &= 0xff;
-    }
-  }
-
-  return crc;
-}
-
-function repeatBits(bits,n=CFG.REDUNDANCY){
-  if(n<=1) return bits;
-
-  let out="";
-  for(let i=0;i<bits.length;i++){
-    out+=bits[i].repeat(n);
-  }
-  return out;
-}
-
-/* ================= AUDIO ================= */
-
-function tone(freq,start,dur,gainValue=0.22){
+function tone(freq,start,dur,gain=0.2){
 
   const osc=audioCtx.createOscillator();
-  const gain=audioCtx.createGain();
+  const g=audioCtx.createGain();
 
   osc.frequency.value=freq;
   osc.type="sine";
 
-  gain.gain.setValueAtTime(0.00001,start);
-  gain.gain.linearRampToValueAtTime(gainValue,start+0.004);
+  g.gain.setValueAtTime(0.00001,start);
+  g.gain.linearRampToValueAtTime(gain,start+0.005);
+  g.gain.linearRampToValueAtTime(0.00001,start+dur);
 
-  gain.gain.setValueAtTime(gainValue,start+dur-0.004);
-  gain.gain.linearRampToValueAtTime(0.00001,start+dur);
-
-  osc.connect(gain);
-  gain.connect(audioCtx.destination);
+  osc.connect(g);
+  g.connect(audioCtx.destination);
 
   osc.start(start);
   osc.stop(start+dur);
 }
 
-/* ================= FRAME BUILD ================= */
+/* ---------------- ENCODING ---------------- */
 
-function buildFrameBits(text){
+function encodeDecimal(text){
 
-  const payload=new TextEncoder().encode(text);
-
-  if(payload.length>255)
-    throw new Error("Message trop long (max 255 octets)");
-
-  const len=payload.length;
-  const crc=crc8(payload);
-
-  const header=
-    CFG.PREAMBLE+
-    CFG.SYNC+
-    len.toString(2).padStart(8,'0');
-
-  const payloadBits=toBits(payload);
-  const crcBits=crc.toString(2).padStart(8,'0');
-
-  const frame=header+payloadBits+crcBits;
-
-  return{
-    visibleBits:frame,
-    encodedBits:repeatBits(frame),
-    len,
-    crc
-  };
+  return text
+    .split("")
+    .map(c=>parseInt(c))
+    .filter(n=>!isNaN(n));
 }
-
-/* ================= SEND ================= */
 
 async function send(){
 
-  const etat=document.getElementById("etat");
-  const binaire=document.getElementById("binaire");
-  const text=document.getElementById("texteInput").value;
-
-  if(!text.trim()){
-    etat.textContent="⚠️ Entrez un texte.";
-    return;
-  }
-
   await audioCtx.resume();
 
-  let frame;
+  const text=document.getElementById("texte").value;
 
-  try{
-    frame=buildFrameBits(text);
-  }catch(err){
-    etat.textContent="❌ "+err.message;
-    return;
+  const symbols=encodeDecimal(text);
+
+  let t=audioCtx.currentTime+0.1;
+
+  /* INIT TONE */
+  tone(INIT_FREQ,t,0.8,0.25);
+
+  t+=1.0;
+
+  for(const s of symbols){
+
+    const freq=SYMBOL_FREQS[s];
+
+    tone(freq,t,SYMBOL_DURATION,0.2);
+
+    drawEmitter(freq,t);
+
+    t+=SYMBOL_DURATION+GAP;
   }
 
-  binaire.textContent=frame.visibleBits;
-
-  let t=audioCtx.currentTime+0.05;
-
-  tone(CFG.START_FREQ,t,CFG.START_DURATION,0.22);
-  t+=CFG.START_DURATION+CFG.GAP_DURATION;
-
-  for(const bit of frame.encodedBits){
-    tone(
-      bit==='0'?CFG.FREQ0:CFG.FREQ1,
-      t,
-      CFG.BIT_DURATION,
-      0.18
-    );
-
-    t+=CFG.BIT_DURATION;
-  }
-
-  t+=CFG.GAP_DURATION;
-
-  tone(CFG.END_FREQ,t,CFG.END_DURATION,0.22);
-
-  const total=(t+CFG.END_DURATION)-audioCtx.currentTime;
-
-  etat.innerHTML=
-    "Transmission lancée<br>"+
-    "Durée estimée: "+total.toFixed(2)+"s";
-
-  setTimeout(()=>{
-    etat.innerHTML+="<br><span class='ok'>Terminé ✅</span>";
-  },Math.max(0,total*1000));
+  document.getElementById("etat").textContent=
+  "Transmission lancée";
 }
 
-document.getElementById("sendBtn")
-.addEventListener("click",send);
-
 </script>
+
 </body>
 </html>

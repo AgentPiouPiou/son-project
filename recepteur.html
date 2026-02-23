@@ -1,93 +1,77 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Récepteur Fast Audio</title>
+<meta charset="UTF-8"/>
+<title>Récepteur décimal temps réel</title>
 
 <style>
 body{
-  font-family: Arial, sans-serif;
+  font-family:Arial;
   max-width:900px;
-  margin:24px auto;
+  margin:auto;
 }
 
-button{
-  padding:10px 14px;
-  font-weight:600;
+canvas{
+  width:100%;
+  height:240px;
+  border:1px solid #ccc;
 }
 
 .mono{
-  font-family: ui-monospace, monospace;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.muted{
-  color:#666;
+  font-family:monospace;
 }
 </style>
 </head>
 
 <body>
 
-<h1>🎧 Récepteur FAST Calibration</h1>
+<h1>🎧 Récepteur ultrasonique</h1>
 
-<button id="startBtn">Démarrer</button>
+<button onclick="start()">Démarrer réception</button>
 
-<h3>Log</h3>
-<p id="log" class="mono">Prêt.</p>
+<h3>Spectre temps réel</h3>
+<canvas id="vizRx"></canvas>
 
-<h3>Bits</h3>
-<p id="bits" class="mono"></p>
-
-<h3>Texte</h3>
-<p id="text" class="mono"></p>
+<h3>Message</h3>
+<p id="msg" class="mono"></p>
 
 <script>
 
-/* ================= CFG ================= */
+const audioCtx=new AudioContext();
 
-const CFG={
-  BIT_DURATION:0.03,
-  START_DURATION:0.5,
-  GAP_DURATION:0.05,
+const SYMBOL_FREQS=[
+15000,16000,17000,18000,19000,
+20000,21000,22000,23000,24000
+];
 
-  FREQ0:1300,
-  FREQ1:2600,
+const INIT_FREQ=14000;
 
-  START_FREQ:3400,
-  END_FREQ:4200,
-
-  PREAMBLE:"10101010",
-  SYNC:"11110000",
-
-  REDUNDANCY:2
-};
-
-/* ================= AUDIO STATE ================= */
-
-let audioCtx;
 let analyser;
-let stream;
-let calibration=null;
 
-let listening=false;
-let receiveTimer=null;
-let startCandidateTime=null;
-let scanRAF=null;
+async function start(){
 
-const logEl=document.getElementById("log");
-const bitsEl=document.getElementById("bits");
-const textEl=document.getElementById("text");
+  const stream=await navigator.mediaDevices.getUserMedia({
+    audio:{
+      echoCancellation:false,
+      noiseSuppression:false,
+      autoGainControl:false
+    }
+  });
 
-function setLog(m){
-  logEl.textContent=m;
+  const source=audioCtx.createMediaStreamSource(stream);
+
+  analyser=audioCtx.createAnalyser();
+  analyser.fftSize=4096;
+
+  source.connect(analyser);
+
+  detectLoop();
+  visualize();
 }
 
-/* ================= SIGNAL ANALYSIS ================= */
+/* ---------------- DETECTION ---------------- */
 
-function energyAt(freq,width=3){
+function energyAt(freq){
 
   const buffer=new Uint8Array(analyser.frequencyBinCount);
   analyser.getByteFrequencyData(buffer);
@@ -96,11 +80,11 @@ function energyAt(freq,width=3){
 
   const idx=Math.round((freq/nyquist)*buffer.length);
 
-  let sum=0;
-  let n=0;
+  let sum=0,n=0;
 
-  for(let i=idx-width;i<=idx+width;i++){
-    if(i>=0 && i<buffer.length){
+  for(let i=idx-2;i<=idx+2;i++){
+
+    if(buffer[i]){
       sum+=buffer[i];
       n++;
     }
@@ -109,252 +93,73 @@ function energyAt(freq,width=3){
   return n?sum/n:0;
 }
 
-/* ================= CALIBRATION ================= */
+let bufferMsg="";
 
-async function calibrateAmbient(ms=4000){
+function detectLoop(){
 
-  setLog("Calibration...");
+  const initEnergy=energyAt(INIT_FREQ);
 
-  const tracks={f0:[],f1:[],fs:[],fe:[]};
-
-  const end=performance.now()+ms;
-
-  return new Promise(resolve=>{
-
-    function step(){
-
-      tracks.f0.push(energyAt(CFG.FREQ0));
-      tracks.f1.push(energyAt(CFG.FREQ1));
-      tracks.fs.push(energyAt(CFG.START_FREQ));
-      tracks.fe.push(energyAt(CFG.END_FREQ));
-
-      if(performance.now()<end){
-        requestAnimationFrame(step);
-      }else{
-
-        const stats=arr=>{
-          const mean=arr.reduce((a,b)=>a+b)/arr.length;
-          const variance=arr.reduce((a,b)=>a+(b-mean)**2)/arr.length;
-          const std=Math.sqrt(variance);
-
-          return{
-            thr:mean+Math.max(10,std*3)
-          };
-        };
-
-        resolve({
-          f0:stats(tracks.f0),
-          f1:stats(tracks.f1),
-          fs:stats(tracks.fs),
-          fe:stats(tracks.fe)
-        });
-      }
-    }
-
-    step();
-  });
-}
-
-/* ================= DECODING ================= */
-
-function majorityDecode(bits,n=CFG.REDUNDANCY){
-
-  let out="";
-
-  for(let i=0;i<bits.length;i+=n){
-
-    let chunk=bits.slice(i,i+n);
-    let ones=0;
-
-    for(const c of chunk)
-      if(c==='1') ones++;
-
-    out+=ones>=n/2?'1':'0';
+  if(initEnergy>120){
+    bufferMsg="";
   }
 
-  return out;
-}
+  let best=-1;
+  let bestIdx=-1;
 
-function bitsToBytes(bits){
+  SYMBOL_FREQS.forEach((f,i)=>{
 
-  const bytes=[];
+    const e=energyAt(f);
 
-  for(let i=0;i+7<bits.length;i+=8){
-    bytes.push(parseInt(bits.slice(i,i+8),2));
-  }
-
-  return bytes;
-}
-
-function crc8(bytes){
-
-  let crc=0;
-
-  for(const b of bytes){
-
-    crc^=b;
-
-    for(let i=0;i<8;i++){
-      crc=(crc&0x80)?((crc<<1)^0x07):(crc<<1);
-      crc&=0xff;
-    }
-  }
-
-  return crc;
-}
-
-function parseFrame(decoded){
-
-  const marker=CFG.PREAMBLE+CFG.SYNC;
-
-  const start=decoded.indexOf(marker);
-  if(start<0) throw new Error("Préambule absent");
-
-  const frame=decoded.slice(start+marker.length);
-
-  const len=parseInt(frame.slice(0,8),2);
-
-  const needed=8+len*8+8;
-  if(frame.length<needed) throw new Error("Trame tronquée");
-
-  const payloadBits=frame.slice(8,8+len*8);
-  const crcBits=frame.slice(8+len*8,8+len*8+8);
-
-  const payload=bitsToBytes(payloadBits);
-
-  if(crc8(payload)!==parseInt(crcBits,2))
-    throw new Error("CRC invalide");
-
-  return new TextDecoder().decode(new Uint8Array(payload));
-}
-
-/* ================= DETECTION ================= */
-
-function scanForStart(){
-
-  if(!analyser||!calibration) return;
-
-  const eStart=energyAt(CFG.START_FREQ);
-  const now=audioCtx.currentTime;
-
-  if(eStart>calibration.fs.thr){
-
-    if(startCandidateTime===null)
-      startCandidateTime=now;
-
-    if((now-startCandidateTime)>=0.25 && !listening){
-
-      listening=true;
-
-      bitsEl.textContent="";
-      textEl.textContent="";
-
-      const firstBit=
-        startCandidateTime+
-        CFG.START_DURATION+
-        CFG.GAP_DURATION+
-        CFG.BIT_DURATION/2;
-
-      launchBitReader(firstBit);
-
-      startCandidateTime=null;
-    }
-
-  }else startCandidateTime=null;
-
-  scanRAF=requestAnimationFrame(scanForStart);
-}
-
-function launchBitReader(firstSampleTime){
-
-  let sampleTime=firstSampleTime;
-  let rawBits="";
-
-  setLog("Réception démarrée");
-
-  function readLoop(){
-
-    if(!listening) return;
-
-    const now=audioCtx.currentTime;
-    const delay=Math.max(0,(sampleTime-now)*1000);
-
-    receiveTimer=setTimeout(()=>{
-
-      if(!listening) return;
-
-      const e0=energyAt(CFG.FREQ0);
-      const e1=energyAt(CFG.FREQ1);
-      const ee=energyAt(CFG.END_FREQ);
-
-      if(ee>(calibration.fe.thr||0)){
-
-        listening=false;
-
-        const decoded=majorityDecode(rawBits);
-
-        bitsEl.textContent=decoded;
-
-        try{
-          textEl.textContent=parseFrame(decoded);
-          setLog("Message reçu ✅");
-        }catch(err){
-          setLog(err.message);
-        }
-
-        return;
-      }
-
-      if(e0>e1) rawBits+="0";
-      else rawBits+="1";
-
-      sampleTime+=CFG.BIT_DURATION;
-
-      readLoop();
-
-    },delay);
-  }
-
-  readLoop();
-}
-
-/* ================= START ================= */
-
-async function start(){
-
-  if(audioCtx){
-    setLog("Déjà démarré");
-    return;
-  }
-
-  stream=await navigator.mediaDevices.getUserMedia({
-    audio:{
-      echoCancellation:false,
-      noiseSuppression:false,
-      autoGainControl:false
+    if(e>best){
+      best=e;
+      bestIdx=i;
     }
   });
 
-  audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  if(best>120 && bestIdx>=0){
+    bufferMsg+=bestIdx.toString();
+    document.getElementById("msg").textContent=bufferMsg;
+  }
 
-  const source=audioCtx.createMediaStreamSource(stream);
-
-  analyser=audioCtx.createAnalyser();
-  analyser.fftSize=8192;
-  analyser.smoothingTimeConstant=0.15;
-
-  source.connect(analyser);
-
-  calibration=await calibrateAmbient();
-
-  setLog("Calibration OK");
-
-  scanForStart();
+  requestAnimationFrame(detectLoop);
 }
 
-document.getElementById("startBtn")
-.addEventListener("click",start);
+/* ---------------- VISUALISATION ---------------- */
+
+function visualize(){
+
+  const canvas=document.getElementById("vizRx");
+  const ctx=canvas.getContext("2d");
+
+  const buffer=new Uint8Array(analyser.frequencyBinCount);
+
+  function draw(){
+
+    analyser.getByteFrequencyData(buffer);
+
+    ctx.fillStyle="white";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    ctx.beginPath();
+
+    for(let i=0;i<buffer.length;i++){
+
+      const x=i/buffer.length*canvas.width;
+      const y=canvas.height-buffer[i];
+
+      if(i===0) ctx.moveTo(x,y);
+      else ctx.lineTo(x,y);
+    }
+
+    ctx.stroke();
+
+    requestAnimationFrame(draw);
+  }
+
+  draw();
+}
 
 </script>
+
 </body>
 </html>
