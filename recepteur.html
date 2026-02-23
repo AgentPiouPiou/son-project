@@ -2,42 +2,38 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Récepteur Avancé</title>
+<title>Récepteur</title>
+<style>
+canvas { border:1px solid black; }
+</style>
 </head>
 <body>
 
-<h2>Récepteur Avancé</h2>
+<h2>Récepteur</h2>
 
-<button onclick="demarrer()">Démarrer (3s calibration)</button>
+<button onclick="start()">Démarrer</button>
 
-<p id="status"></p>
+<p id="bits"></p>
 <p id="texte"></p>
+
+<canvas id="spectre" width="600" height="200"></canvas>
 
 <script>
 
-const BIT_DURATION = 110;
-
-const FREQ = {
-  3200: "00",
-  3600: "01",
-  4000: "10",
-  4400: "11"
-};
-
+const BIT_DURATION = 150;
+const FREQ0 = 3500;
+const FREQ1 = 4200;
 const START = 5000;
 const END = 5500;
 
-let audioCtx, analyser, stream;
-let noiseLevel = 0;
+let audioCtx, analyser;
 let receiving = false;
-let symbols = [];
+let currentBits = "";
+let finalText = "";
 
-async function demarrer(){
+async function start(){
 
-    document.getElementById("status").innerText =
-        "Calibration...";
-
-    stream = await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
         audio:{
             echoCancellation:false,
             noiseSuppression:false,
@@ -47,31 +43,35 @@ async function demarrer(){
 
     audioCtx = new AudioContext();
     const source = audioCtx.createMediaStreamSource(stream);
+
     analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 4096;
+    analyser.fftSize = 2048;
     source.connect(analyser);
 
-    const buffer = new Uint8Array(analyser.frequencyBinCount);
-
-    let total = 0;
-    let count = 0;
-    const start = Date.now();
-
-    while(Date.now() - start < 3000){
-        analyser.getByteFrequencyData(buffer);
-        total += Math.max(...buffer);
-        count++;
-    }
-
-    noiseLevel = total / count + 10;
-
-    document.getElementById("status").innerText =
-        "Prêt";
-
-    loop();
+    drawSpectrum();
+    listen();
 }
 
-function getPeak(){
+function drawSpectrum(){
+
+    const canvas = document.getElementById("spectre");
+    const ctx = canvas.getContext("2d");
+    const buffer = new Uint8Array(analyser.frequencyBinCount);
+
+    function draw(){
+        requestAnimationFrame(draw);
+        analyser.getByteFrequencyData(buffer);
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+
+        for(let i=0;i<buffer.length;i++){
+            ctx.fillRect(i, canvas.height, 2, -buffer[i]);
+        }
+    }
+
+    draw();
+}
+
+function getFrequency(){
 
     const buffer = new Uint8Array(analyser.frequencyBinCount);
     analyser.getByteFrequencyData(buffer);
@@ -86,91 +86,51 @@ function getPeak(){
         }
     }
 
-    if(max < noiseLevel) return null;
-
     return index * audioCtx.sampleRate / analyser.fftSize;
 }
 
-function detectSymbol(freq){
+function listen(){
 
-    if(!freq) return null;
+    const freq = getFrequency();
 
-    for(let f in FREQ){
-        if(Math.abs(freq - f) < 120){
-            return FREQ[f];
+    if(Math.abs(freq-START)<200){
+        receiving = true;
+        currentBits = "";
+        finalText = "";
+    }
+
+    if(receiving){
+
+        if(Math.abs(freq-FREQ0)<150){
+            addBit("0");
+        }
+        else if(Math.abs(freq-FREQ1)<150){
+            addBit("1");
+        }
+
+        if(Math.abs(freq-END)<200){
+            receiving = false;
         }
     }
 
-    return null;
+    requestAnimationFrame(listen);
 }
 
-function loop(){
+function addBit(bit){
 
-    const freq = getPeak();
+    currentBits += bit;
+    document.getElementById("bits").innerText = currentBits;
 
-    if(freq && Math.abs(freq - START) < 150){
-        receiving = true;
-        symbols = [];
-        setTimeout(readSymbol, 1000);
+    if(currentBits.length === 8){
+
+        const letter =
+            String.fromCharCode(parseInt(currentBits,2));
+
+        finalText += letter;
+        document.getElementById("texte").innerText = finalText;
+
+        currentBits = "";
     }
-
-    requestAnimationFrame(loop);
-}
-
-function readSymbol(){
-
-    if(!receiving) return;
-
-    const samples = [];
-
-    for(let i=0;i<3;i++){
-        samples.push(detectSymbol(getPeak()));
-    }
-
-    const valid = samples.filter(s => s !== null);
-
-    if(valid.length > 1){
-        symbols.push(valid[0]);
-    }
-
-    const freq = getPeak();
-
-    if(freq && Math.abs(freq - END) < 150){
-        receiving = false;
-        decode();
-        return;
-    }
-
-    setTimeout(readSymbol, BIT_DURATION*2);
-}
-
-function decode(){
-
-    let binary = symbols.join("");
-
-    const data = binary.slice(0,-8);
-    const crc = binary.slice(-8);
-
-    let check = 0;
-    for(let i=0;i<data.length;i++){
-        check ^= parseInt(data[i]);
-    }
-
-    if(check.toString(2).padStart(8,"0") !== crc){
-        document.getElementById("texte").innerText =
-            "Erreur CRC (bruit détecté)";
-        return;
-    }
-
-    let texte = "";
-
-    for(let i=0;i<data.length;i+=8){
-        const byte = data.slice(i,i+8);
-        texte += String.fromCharCode(parseInt(byte,2));
-    }
-
-    document.getElementById("texte").innerText =
-        "Reçu : " + texte;
 }
 
 </script>
