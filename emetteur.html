@@ -2,16 +2,14 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Émetteur Ultra Stable</title>
+<title>Émetteur Simple</title>
 <style>
 .bold { font-weight:bold; color:red; }
-.progress { width:100%; height:20px; background:#ddd; margin-top:10px;}
-.bar { height:100%; width:0%; background:green;}
 </style>
 </head>
 <body>
 
-<h2>Émetteur Ultra Stable</h2>
+<h2>Émetteur Simple</h2>
 
 <input id="texteInput" placeholder="Tape ton texte">
 <button onclick="envoyer()">Envoyer</button>
@@ -19,16 +17,13 @@
 <p id="texteAffiche"></p>
 <p id="binaireAffiche"></p>
 
-<div class="progress"><div class="bar" id="bar"></div></div>
-<p id="percent">0%</p>
-
 <script>
 
-const BIT_DURATION = 0.25;
-const FREQ0 = 1500;
-const FREQ1 = 5000;
-const START = 7000;
-const END = 9000;
+const BIT_DURATION = 0.2;
+const FREQ0 = 1200;
+const FREQ1 = 2200;
+const START = 3000;
+const END = 3500;
 
 let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -51,38 +46,28 @@ async function envoyer(){
     const texte = document.getElementById("texteInput").value;
     const binaries = textToBinary(texte);
 
-    document.getElementById("texteAffiche").innerText = texte;
-    document.getElementById("binaireAffiche").innerText = binaries.join(" ");
-
     let time = audioCtx.currentTime;
 
-    tone(START,1.2,time);
-    time+=1.2;
+    tone(START,1,time);
+    time+=1;
 
     for(let i=0;i<binaries.length;i++){
 
-        const letters = texte.split('');
         document.getElementById("texteAffiche").innerHTML =
-            letters.map((l,index)=>
+            texte.split('').map((l,index)=>
                 index===i ? `<span class="bold">${l}</span>` : l
             ).join('');
 
-        document.getElementById("binaireAffiche").innerHTML =
-            binaries.map((b,index)=>
-                index===i ? `<span class="bold">${b}</span>` : b
-            ).join(" ");
+        document.getElementById("binaireAffiche").innerText =
+            binaries[i];
 
         for(let bit of binaries[i]){
             tone(bit==="0"?FREQ0:FREQ1,BIT_DURATION,time);
             time+=BIT_DURATION;
         }
-
-        let progress = Math.round(((i+1)/binaries.length)*100);
-        document.getElementById("bar").style.width = progress+"%";
-        document.getElementById("percent").innerText = progress+"%";
     }
 
-    tone(END,1.2,time);
+    tone(END,1,time);
 }
 
 </script>
