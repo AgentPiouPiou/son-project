@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Récepteur Stable</title>
+<title>Récepteur Stable V2</title>
 <style>
 canvas { border:1px solid black; margin-top:10px;}
 </style>
@@ -18,7 +18,6 @@ canvas { border:1px solid black; margin-top:10px;}
 
 <script>
 
-const BIT_DURATION = 180;
 const FREQ0 = 3000;
 const FREQ1 = 3800;
 const START = 4500;
@@ -27,10 +26,12 @@ const END = 5000;
 let audioCtx, analyser;
 let noiseLevel = 0;
 
+let receiving = false;
+let currentBit = null;
+let bitCount = 0;
 let bitBuffer = "";
 let firstCopy = null;
 let finalText = "";
-let readingInterval = null;
 
 async function start(){
 
@@ -45,7 +46,7 @@ async function start(){
     audioCtx = new AudioContext();
     const source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 2048;
+    analyser.fftSize = 4096;
     source.connect(analyser);
 
     calibrate();
@@ -64,9 +65,9 @@ function calibrate(){
         if(Date.now()-startTime < 3000){
             requestAnimationFrame(measure);
         } else {
-            noiseLevel = total/count + 15;
+            noiseLevel = total/count + 20;
             drawSpectrum();
-            waitForStart();
+            listen();
         }
     }
     measure();
@@ -106,54 +107,63 @@ function getFreq(){
     return index*audioCtx.sampleRate/analyser.fftSize;
 }
 
-function waitForStart(){
-
-    function check(){
-        const freq = getFreq();
-        if(freq && Math.abs(freq-START)<200){
-            finalText="";
-            bitBuffer="";
-            firstCopy=null;
-
-            setTimeout(()=>{
-                readingInterval = setInterval(readBit, BIT_DURATION);
-            },500); // petit décalage
-        }
-        requestAnimationFrame(check);
-    }
-    check();
-}
-
-function readBit(){
+function listen(){
 
     const freq = getFreq();
 
-    if(!freq) return;
+    if(!receiving){
+        if(freq && Math.abs(freq-START)<200){
+            receiving=true;
+            finalText="";
+            bitBuffer="";
+            firstCopy=null;
+        }
+    }
+    else{
 
-    if(Math.abs(freq-END)<200){
-        clearInterval(readingInterval);
-        return;
+        if(freq && Math.abs(freq-END)<200){
+            receiving=false;
+            currentBit=null;
+        }
+
+        let detectedBit=null;
+
+        if(freq && Math.abs(freq-FREQ0)<150) detectedBit="0";
+        if(freq && Math.abs(freq-FREQ1)<150) detectedBit="1";
+
+        if(detectedBit!==null){
+
+            if(currentBit===null){
+                currentBit=detectedBit;
+                bitCount=1;
+            }
+            else if(currentBit===detectedBit){
+                bitCount++;
+            }
+            else{
+                if(bitCount>5){ // stabilité minimum
+                    processBit(currentBit);
+                }
+                currentBit=detectedBit;
+                bitCount=1;
+            }
+        }
     }
 
-    if(Math.abs(freq-FREQ0)<150){
-        processBit("0");
-    }
-    else if(Math.abs(freq-FREQ1)<150){
-        processBit("1");
-    }
+    requestAnimationFrame(listen);
 }
 
 function processBit(bit){
 
-    bitBuffer += bit;
+    bitBuffer+=bit;
 
     document.getElementById("affichage").innerText =
-        finalText + " [" + bitBuffer + "]";
+        finalText + " ["+bitBuffer+"]";
 
     if(bitBuffer.length===8){
 
         if(firstCopy===null){
-            firstCopy = bitBuffer;
+            firstCopy=bitBuffer;
             bitBuffer="";
         }
         else{
