@@ -19,6 +19,7 @@ canvas{
 
 .mono{
     font-family:monospace;
+    white-space:pre-wrap;
 }
 </style>
 </head>
@@ -41,19 +42,12 @@ canvas{
 const audioCtx=new AudioContext();
 
 const FREQUENCIES=[
-800,
-1200,
-1600,
-2000,
-2400,
-2800,
-3200,
-4000
+800,1200,1600,2000,2400,2800,3200,4000
 ];
 
 let analyser;
 
-/* Detection énergétique */
+/* Detection énergie */
 
 function energyAround(freq){
 
@@ -77,6 +71,9 @@ function energyAround(freq){
 }
 
 let bufferMessage="";
+let lastSymbolTime=0;
+
+/* Detection loop */
 
 function detectLoop(){
 
@@ -85,7 +82,7 @@ function detectLoop(){
 
     FREQUENCIES.forEach((f,i)=>{
 
-        let e=energyAround(f);
+        const e=energyAround(f);
 
         if(e>best){
             best=e;
@@ -94,12 +91,18 @@ function detectLoop(){
     });
 
     if(best>120 && bestIdx>=0){
-        bufferMessage+=String.fromCharCode(
-            bestIdx + "A".charCodeAt(0)
-        );
+
+        const letter=
+            String.fromCharCode(
+                bestIdx + "A".charCodeAt(0)
+            );
+
+        bufferMessage+=letter;
 
         document.getElementById("message").innerHTML=
             bufferMessage;
+
+        lastSymbolTime=performance.now();
     }
 
     requestAnimationFrame(detectLoop);

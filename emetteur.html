@@ -37,28 +37,19 @@ textarea{
 
 <button onclick="send()">Envoyer</button>
 
-<h3>Information transmission</h3>
-
-<p id="info" class="mono"></p>
-
 <h3>Caractère envoyé en temps réel</h3>
-
 <p id="currentChar" class="bold"></p>
+
+<h3>Information transmission</h3>
+<p id="info" class="mono"></p>
 
 <script>
 
 const audioCtx=new AudioContext();
 
-/* Fréquences très séparées pour stabilité */
+/* Fréquences distinctes */
 const FREQUENCIES=[
-800,
-1200,
-1600,
-2000,
-2400,
-2800,
-3200,
-4000
+800,1200,1600,2000,2400,2800,3200,4000
 ];
 
 const SYMBOL_DURATION=0.06;
@@ -96,55 +87,61 @@ async function send(){
 
     if(!text.trim()) return;
 
-    let chars=text.split("");
+    const chars=text.split("");
 
-    let totalTimeEstimate=
+    const totalTime=
         0.8 + 1.0 + chars.length*(SYMBOL_DURATION+GAP);
 
-    document.getElementById("info").innerHTML=
-        "Texte longueur : "+chars.length+"<br>"+
-        "Temps total estimé : "+totalTimeEstimate.toFixed(2)+" s<br>"+
-        "Temps restant dynamique affiché pendant émission";
+    const startTime=audioCtx.currentTime+0.1;
 
-    let t=audioCtx.currentTime+0.1;
+    /* START tone */
+    tone(INIT_FREQ,startTime,0.8);
 
-    tone(INIT_FREQ,t,0.8);
-
-    t+=1.0;
+    let symbolStart=startTime+0.8+0.2;
 
     let index=0;
 
-    function transmitNext(){
+    function renderUI(){
 
-        if(index>=chars.length) return;
+        let elapsed=audioCtx.currentTime-startTime;
+        let remaining=Math.max(0,totalTime-elapsed);
 
-        let char=chars[index];
-
-        document.getElementById("currentChar").innerHTML=
-            "Envoi : <b>"+char+"</b>";
-
-        let code=char.charCodeAt(0)%FREQUENCIES.length;
-
-        tone(FREQUENCIES[code],t,SYMBOL_DURATION);
-
-        let elapsed=index*(SYMBOL_DURATION+GAP);
-
-        let remaining=
-            totalTimeEstimate-elapsed;
+        if(index<chars.length){
+            document.getElementById("currentChar").innerHTML=
+                "Envoi : <b>"+chars[index]+"</b>";
+        }
 
         document.getElementById("info").innerHTML=
             "Transmission en cours<br>"+
             "Caractère "+(index+1)+"/"+chars.length+"<br>"+
             "Temps restant ≈ "+remaining.toFixed(2)+" s";
 
+        if(elapsed<totalTime){
+            requestAnimationFrame(renderUI);
+        }
+    }
+
+    renderUI();
+
+    function transmitNext(){
+
+        if(index>=chars.length) return;
+
+        const char=chars[index];
+
+        const code=char.charCodeAt(0)%FREQUENCIES.length;
+
+        tone(FREQUENCIES[code],symbolStart,
+             SYMBOL_DURATION);
+
         index++;
 
-        t+=SYMBOL_DURATION+GAP;
+        symbolStart+=SYMBOL_DURATION+GAP;
 
         setTimeout(transmitNext,SYMBOL_DURATION*1000);
     }
 
-    transmitNext();
+    setTimeout(transmitNext,1000);
 }
 
 </script>
