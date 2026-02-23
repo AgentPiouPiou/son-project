@@ -2,11 +2,11 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Récepteur Simple</title>
+<title>Récepteur Sync</title>
 </head>
 <body>
 
-<h2>Récepteur Simple</h2>
+<h2>Récepteur avec Synchronisation</h2>
 <button onclick="start()">Démarrer</button>
 
 <p id="affichage"></p>
@@ -19,9 +19,11 @@ const FREQ1 = 2200;
 const START = 3000;
 const END = 3500;
 
+const PREAMBLE = "11110000";
+
 let audioCtx, analyser;
 let receiving = false;
-let bitBuffer = "";
+let bitStream = "";
 let finalText = "";
 
 async function start(){
@@ -69,7 +71,7 @@ function listen(){
         if(Math.abs(freq-START)<200){
             receiving=true;
             finalText="";
-            bitBuffer="";
+            bitStream="";
             setTimeout(readBit,BIT_DURATION);
         }
     }
@@ -88,28 +90,31 @@ function readBit(){
         return;
     }
 
-    if(Math.abs(freq-FREQ0)<150){
-        processBit("0");
-    }
-    else if(Math.abs(freq-FREQ1)<150){
-        processBit("1");
+    let bit=null;
+
+    if(Math.abs(freq-FREQ0)<150) bit="0";
+    else if(Math.abs(freq-FREQ1)<150) bit="1";
+
+    if(bit){
+        bitStream+=bit;
+
+        document.getElementById("affichage").innerText =
+            finalText + " ["+bitStream+"]";
+
+        // Cherche le préambule
+        if(bitStream.endsWith(PREAMBLE)){
+            bitStream="";
+        }
+
+        // Quand on a 8 bits après préambule
+        if(bitStream.length===8){
+            finalText +=
+                String.fromCharCode(parseInt(bitStream,2));
+            bitStream="";
+        }
     }
 
     setTimeout(readBit,BIT_DURATION);
-}
-
-function processBit(bit){
-
-    bitBuffer+=bit;
-
-    document.getElementById("affichage").innerText =
-        finalText + " ["+bitBuffer+"]";
-
-    if(bitBuffer.length===8){
-        finalText +=
-            String.fromCharCode(parseInt(bitBuffer,2));
-        bitBuffer="";
-    }
 }
 
 </script>

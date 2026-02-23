@@ -2,14 +2,14 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Émetteur Simple</title>
+<title>Émetteur Sync</title>
 <style>
 .bold { font-weight:bold; color:red; }
 </style>
 </head>
 <body>
 
-<h2>Émetteur Simple</h2>
+<h2>Émetteur avec Synchronisation</h2>
 
 <input id="texteInput" placeholder="Tape ton texte">
 <button onclick="envoyer()">Envoyer</button>
@@ -24,6 +24,8 @@ const FREQ0 = 1200;
 const FREQ1 = 2200;
 const START = 3000;
 const END = 3500;
+
+const PREAMBLE = "11110000";
 
 let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -59,9 +61,11 @@ async function envoyer(){
             ).join('');
 
         document.getElementById("binaireAffiche").innerText =
-            binaries[i];
+            PREAMBLE + " " + binaries[i];
 
-        for(let bit of binaries[i]){
+        let fullByte = PREAMBLE + binaries[i];
+
+        for(let bit of fullByte){
             tone(bit==="0"?FREQ0:FREQ1,BIT_DURATION,time);
             time+=BIT_DURATION;
         }
